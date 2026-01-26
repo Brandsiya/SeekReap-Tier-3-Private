@@ -5,9 +5,6 @@ Simple test to verify Tier-3 structure works.
 import sys
 import os
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 def test_imports():
     """Test that all modules can be imported."""
     try:
@@ -32,6 +29,30 @@ def test_consumer_creation():
         print(f"❌ Consumer creation failed: {e}")
         return False
 
+def test_processor_creation():
+    """Test semantic processor creation."""
+    try:
+        from semantic_processors.processor import SemanticProcessor
+        processor = SemanticProcessor()
+        assert processor is not None
+        print("✅ Processor creation successful")
+        return True
+    except Exception as e:
+        print(f"❌ Processor creation failed: {e}")
+        return False
+
+def test_scorer_creation():
+    """Test monetization scorer creation."""
+    try:
+        from scoring_engines.scorer import MonetizationScorer
+        scorer = MonetizationScorer()
+        assert scorer is not None
+        print("✅ Scorer creation successful")
+        return True
+    except Exception as e:
+        print(f"❌ Scorer creation failed: {e}")
+        return False
+
 def main():
     """Run all tests."""
     print("=== TIER-3 SIMPLE TESTS ===")
@@ -40,6 +61,8 @@ def main():
     tests = [
         test_imports,
         test_consumer_creation,
+        test_processor_creation,
+        test_scorer_creation,
     ]
     
     results = []
@@ -64,5 +87,7 @@ def main():
     return passed == total
 
 if __name__ == "__main__":
+    # Ensure we can import from the parent directory
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     success = main()
     sys.exit(0 if success else 1)

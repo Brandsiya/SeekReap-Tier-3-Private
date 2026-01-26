@@ -1,13 +1,9 @@
 """
 Example usage of the Tier-3 semantic processing system.
+Demonstrates the complete pipeline from envelope to monetization.
 """
 import json
 import base64
-
-# Import our Tier-3 modules
-from envelope_consumers.consumer import create_consumer
-from semantic_processors.processor import SemanticProcessor
-from scoring_engines.scorer import MonetizationScorer
 
 def create_sample_envelope():
     """Create a sample envelope similar to what Tier-2 would produce."""
@@ -37,6 +33,11 @@ def create_sample_envelope():
 
 def main():
     """Run the complete Tier-3 processing pipeline."""
+    # Import here to avoid circular imports
+    from envelope_consumers.consumer import create_consumer
+    from semantic_processors.processor import SemanticProcessor
+    from scoring_engines.scorer import MonetizationScorer
+    
     print("=== SEEKREAP TIER-3 DEMONSTRATION ===")
     print()
     

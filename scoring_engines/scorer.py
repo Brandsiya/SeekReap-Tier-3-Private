@@ -1,7 +1,7 @@
 """
 Monetization scorer - calculates business value from insights.
 """
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 class MonetizationScorer:
     """Scores semantic insights for business value."""
