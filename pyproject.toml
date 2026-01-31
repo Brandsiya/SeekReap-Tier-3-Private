@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seekreap-tier3"
-version = "3.0.0-private"
+version = "3.0.0.dev0"
 description = "SeekReap Tier 3: Private Semantic Layer"
 readme = "README.md"
 license = {text = "PROPRIETARY"}
