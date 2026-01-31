@@ -8,7 +8,7 @@ from setuptools import setup, find_packages
 if __name__ == "__main__":
     setup(
         name="seekreap-tier3",
-        version="3.0.0-private",
+        version="3.0.0.dev0",
         description="SeekReap Tier 3: Private Semantic Layer",
         author="SeekReap Team",
         author_email="tier3@seekreap.example.com",
