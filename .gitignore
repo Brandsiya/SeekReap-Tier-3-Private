@@ -52,3 +52,5 @@ config.json
 secrets.json
 .env
 .env.local
+venv_t3/
+venv_t3/
