@@ -54,3 +54,13 @@ secrets.json
 .env.local
 venv_t3/
 venv_t3/
+# Runtime
+tier3_server.pid
+tier3_server.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv*/
