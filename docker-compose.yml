@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  tier2-node1:
+    build: ../SeekReap-Tier-2-Semantic
+    ports: ["8001:8000"]
+  tier2-node2:
+    build: ../SeekReap-Tier-2-Semantic  
+    ports: ["8002:8000"]
+  tier2-node3:
+    build: ../SeekReap-Tier-2-Semantic
+    ports: ["8003:8000"]
+  tier3-coordinator:
+    build: .
+    ports: ["9000:9000"]
+    depends_on: [tier2-node1, tier2-node2, tier2-node3]
