@@ -1,0 +1,28 @@
+./envelope_consumers/consumer.py:class EnvelopeConsumer:
+./scoring_engines/scorer.py:class Scorer:
+./semantic_processors/processor.py:class Processor:
+./tests/test_simple.py:def test_imports():
+./tests/test_simple.py:def test_consumer_creation():
+./tests/test_simple.py:def test_processor_creation():
+./tests/test_simple.py:def test_scorer_creation():
+./tests/test_simple.py:def main():
+./tier3/validators.py:class EnvelopeValidationError(Exception):
+./tier3/validators.py:def validate_tier2_envelope(envelope: dict):
+./tier3/api.py:class Tier4Output(TypedDict):
+./tier3/api.py:def ensure_version(envelope: dict) -> dict:
+./tier3/api.py:def _original_process_input(envelope: dict) -> dict:
+./tier3/api.py:def _original_score_envelope(envelope: dict) -> Tier4Output:
+./tier3/api.py:def _original_process_batch(envelopes: list[dict]) -> list[Tier4Output]:
+./tier3/api.py:def process_input(envelope: dict) -> dict:
+./tier3/api.py:def score_envelope(envelope: dict) -> Tier4Output:
+./tier3/api.py:def process_batch(envelopes: list[dict]) -> list[Tier4Output]:
+./tier3/test_tier3.py:def make_valid_envelope(envelope_id: str, value: float) -> dict:
+./tier3/tier3_final_test.py:def make_valid_envelope(envelope_id: str, value: float) -> dict:
+./test_tier3.py:def make_valid_envelope(envelope_id: str, value: float) -> dict:
+./tier3_api_app.py:class Envelope(BaseModel):
+./tier3_api_app.py:def score_single(envelope: Envelope):
+./tier3_api_app.py:def score_batch(batch: list[Envelope]):
+./tier2_client.py:class Tier2Client:
+./consensus_engine.py:class VerificationResult:
+./consensus_engine.py:class ConsensusEngine:
+./main.py:class VerifyRequest(BaseModel):

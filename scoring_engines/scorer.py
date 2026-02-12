@@ -1,16 +1,17 @@
-from tier3.validators import validate_tier2_envelope, EnvelopeValidationError
+from tier3.contract import compute_score, derive_decision
 
-class Scorer:
-    def __init__(self, envelope=None):
-        if envelope is not None:
-            try:
-                validate_tier2_envelope(envelope)
-            except EnvelopeValidationError as e:
-                raise ValueError(f"Invalid envelope for Scorer: {e}")
-        self.envelope = envelope
+class MonetizationScorer:
 
-    def score(self):
-        if self.envelope:
-            print(f"Scoring envelope: {self.envelope}")
-        else:
-            print("No envelope provided.")
+    def score(self, semantic_output: dict) -> dict:
+        quality_score = semantic_output["quality_score"]
+        risk_score = semantic_output["risk_score"]
+
+        final_score = compute_score(quality_score, risk_score)
+        decision = derive_decision(final_score)
+
+        return {
+            "score": final_score,
+            "decision": decision,
+            "risk_score": risk_score,
+            "quality_score": quality_score,
+        }
