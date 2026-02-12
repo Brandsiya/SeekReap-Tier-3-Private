@@ -1,93 +1,21 @@
-#!/usr/bin/env python3
-"""
-Simple test to verify Tier-3 structure works.
-"""
-import sys
-import os
+import pytest
+from tier3.api import score_envelope
+from tier3 import validators
 
-def test_imports():
-    """Test that all modules can be imported."""
-    try:
-        from envelope_consumers.consumer import create_consumer
-        from semantic_processors.processor import SemanticProcessor
-        from scoring_engines.scorer import MonetizationScorer
-        print("✅ All imports successful")
-        return True
-    except ImportError as e:
-        print(f"❌ Import failed: {e}")
-        return False
+def test_score_envelope_basic():
+    envelope = {
+        "content": "Hello world",
+        "metadata": {"author": "tester", "timestamp": "2026-02-12T00:00:00Z"},
+        "context": {"source": "unit_test", "version": 1}
+    }
+    result = score_envelope(envelope)
+    assert isinstance(result, dict)
+    assert "score" in result
 
-def test_consumer_creation():
-    """Test envelope consumer creation."""
-    try:
-        from envelope_consumers.consumer import create_consumer
-        consumer = create_consumer()
-        assert consumer is not None
-        print("✅ Consumer creation successful")
-        return True
-    except Exception as e:
-        print(f"❌ Consumer creation failed: {e}")
-        return False
-
-def test_processor_creation():
-    """Test semantic processor creation."""
-    try:
-        from semantic_processors.processor import SemanticProcessor
-        processor = SemanticProcessor()
-        assert processor is not None
-        print("✅ Processor creation successful")
-        return True
-    except Exception as e:
-        print(f"❌ Processor creation failed: {e}")
-        return False
-
-def test_scorer_creation():
-    """Test monetization scorer creation."""
-    try:
-        from scoring_engines.scorer import MonetizationScorer
-        scorer = MonetizationScorer()
-        assert scorer is not None
-        print("✅ Scorer creation successful")
-        return True
-    except Exception as e:
-        print(f"❌ Scorer creation failed: {e}")
-        return False
-
-def main():
-    """Run all tests."""
-    print("=== TIER-3 SIMPLE TESTS ===")
-    print()
-    
-    tests = [
-        test_imports,
-        test_consumer_creation,
-        test_processor_creation,
-        test_scorer_creation,
-    ]
-    
-    results = []
-    for test in tests:
-        try:
-            results.append(test())
-        except Exception as e:
-            print(f"❌ Test failed with exception: {e}")
-            results.append(False)
-    
-    print()
-    print("=== TEST SUMMARY ===")
-    passed = sum(results)
-    total = len(results)
-    
-    if passed == total:
-        print(f"✅ All {total} tests passed!")
-    else:
-        print(f"⚠️  {passed}/{total} tests passed")
-        print(f"❌ {total - passed} tests failed")
-    
-    return passed == total
-
-if __name__ == "__main__":
-    # Ensure we can import from the parent directory
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    success = main()
-    sys.exit(0 if success else 1)
+def test_validate_envelope_accepts_correct_type():
+    envelope = {
+        "content": "Valid string",
+        "metadata": {"author": "tester", "timestamp": "2026-02-12T00:00:00Z"},
+        "context": {"source": "unit_test", "version": 1}
+    }
+    validators.validate_envelope(envelope)  # should not raise
