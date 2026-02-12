@@ -1,6 +1,8 @@
-from tier3.contract import TIER3_VERSION
+from tier3.validators import validate_envelope
 
 def score_envelope(envelope: dict) -> dict:
+    validate_envelope(envelope)
+
     semantic_output = processor.process(envelope["content"])
     result = scorer.score(semantic_output)
 
