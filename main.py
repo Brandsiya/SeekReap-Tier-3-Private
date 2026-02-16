@@ -1,46 +1,36 @@
-from fastapi import FastAPI, HTTPException
+import aiohttp, asyncio
+TIER4_URL = 'https://seekreap-tier-4-orchestrator-nrn4.onrender.com/v4/process'
+from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict, Any
-import time
 
-app = FastAPI(title="SeekReap Tier-3 Processing Engine")
+# Deterministic scoring class
+class MonetizationScorer:
+    def score(self, semantic_output: dict) -> dict:
+        quality_score = semantic_output.get("quality_score", 0.8)
+        risk_score = semantic_output.get("risk_score", 0.2)
 
-
-class TaskPayload(BaseModel):
-    task_id: str
-    pipeline: str
-    inputs: Dict[str, Any]
-    context: Dict[str, Any]
-
-
-@app.get("/")
-async def root():
-    return {"status": "SeekReap Tier-3 is running!"}
-
-
-@app.post("/v3/verify")
-async def verify(payload: TaskPayload):
-    start_time = time.time()
-
-    try:
-        # Simulated processing logic
-        result = {
-            "processed_param": payload.inputs.get("param", 0) * 10,
-            "pipeline_used": payload.pipeline
-        }
+        final_score = quality_score - risk_score  # replace with compute_score if available
+        decision = "approve" if final_score >= 0.5 else "reject"  # replace with derive_decision if available
 
         return {
-            "status": "success",
-            "task_id": payload.task_id,
-            "pipeline": payload.pipeline,
-            "result": result,
-            "execution_time": round(time.time() - start_time, 4)
+            "score": final_score,
+            "decision": decision,
+            "risk_score": risk_score,
+            "quality_score": quality_score,
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+app = FastAPI()
+scorer = MonetizationScorer()
 
+class Envelope(BaseModel):
+    content: str
+    quality_score: float = 0.8
+    risk_score: float = 0.2
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+@app.post("/compute")
+def compute(envelope: Envelope):
+    semantic_output = {
+        "quality_score": envelope.quality_score,
+        "risk_score": envelope.risk_score,
+    }
+    return scorer.score(semantic_output)
