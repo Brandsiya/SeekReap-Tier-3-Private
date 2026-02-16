@@ -20,6 +20,11 @@ class MonetizationScorer:
         }
 
 app = FastAPI()
+
+@app.get("/")
+def health():
+    return {"status": "Tier-3 is running"}
+
 scorer = MonetizationScorer()
 
 class Envelope(BaseModel):
