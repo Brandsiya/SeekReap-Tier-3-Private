@@ -1,9 +1,13 @@
+import aiohttp
+import asyncio
+import uuid
 import os
-import aiohttp, asyncio
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-TIER4_URL = os.getenv("TIER4_URL", "https://seekreap-tier-4-orchestrator-nrn4.onrender.com/process")
+TIER4_URL = 'https://seekreap-tier-4-orchestrator-nrn4.onrender.com/process'
+
+app = FastAPI()
 
 class MonetizationScorer:
     def score(self, semantic_output: dict) -> dict:
@@ -18,21 +22,23 @@ class MonetizationScorer:
             "quality_score": quality_score,
         }
 
-app = FastAPI()
 scorer = MonetizationScorer()
-
-@app.get("/")
-def health():
-    return {"status": "Tier-3 is running"}
 
 class Envelope(BaseModel):
     content: str
     quality_score: float = 0.8
     risk_score: float = 0.2
 
+@app.get("/")
+def health():
+    return {"status": "Tier-3 is running"}
+
 @app.post("/compute")
 def compute(envelope: Envelope):
-    semantic_output = {"quality_score": envelope.quality_score, "risk_score": envelope.risk_score}
+    semantic_output = {
+        "quality_score": envelope.quality_score,
+        "risk_score": envelope.risk_score,
+    }
     return scorer.score(semantic_output)
 
 async def call_tier4(payload: dict):
@@ -43,14 +49,17 @@ async def call_tier4(payload: dict):
 @app.post("/verify")
 async def verify(envelope: Envelope):
     payload = {
-        "task_id": "t3_" + envelope.content[:6],
-        "task_type": "monetization",
+        "task_id": f"verify_{uuid.uuid4()}",
+        "task_type": "moderation",
         "inputs": envelope.dict(),
         "context": {}
     }
     tier4_response = await call_tier4(payload)
     local_score = scorer.score({"quality_score": envelope.quality_score, "risk_score": envelope.risk_score})
-    return {"tier3_score": local_score, "tier4_response": tier4_response}
+    return {
+        "tier3_score": local_score,
+        "tier4_response": tier4_response
+    }
 
 if __name__ == "__main__":
     import uvicorn
