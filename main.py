@@ -530,3 +530,43 @@ async def debug_check_submission(submission_id: str):
         }
     except Exception as e:
         return {"error": str(e)}
+
+# Replace the debug endpoint with corrected version
+@app.get("/debug/check-submission/{submission_id}")
+async def debug_check_submission(submission_id: str):
+    """Debug why a submission isn't getting policy checks"""
+    try:
+        # Check if submission exists - use db_pool, not pool!
+        submission = await db_pool.fetchrow(
+            "SELECT * FROM content_submissions WHERE submission_id = $1",
+            submission_id
+        )
+        
+        if not submission:
+            return {"error": "Submission not found"}
+        
+        # Check if there's a job for this submission
+        job = await db_pool.fetchrow(
+            "SELECT * FROM job_queue WHERE submission_id::text = $1",
+            submission_id
+        )
+        
+        # Try to manually trigger processing
+        content_data = {
+            "title": submission['title'],
+            "description": submission['description'],
+            "tags": submission['tags']
+        }
+        
+        # This will attempt to create policy checks
+        result = await process_content_submission(submission_id, content_data)
+        
+        return {
+            "submission": dict(submission),
+            "job": dict(job) if job else None,
+            "processing_result": result,
+            "message": "Manual processing attempted",
+            "db_pool_status": "connected"
+        }
+    except Exception as e:
+        return {"error": str(e), "type": str(type(e).__name__)}
