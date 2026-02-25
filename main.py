@@ -490,3 +490,43 @@ async def get_policy_categories():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+
+# Add after the process_content_submission function
+@app.get("/debug/check-submission/{submission_id}")
+async def debug_check_submission(submission_id: str):
+    """Debug why a submission isn't getting policy checks"""
+    try:
+        # Check if submission exists
+        submission = await pool.fetchrow(
+            "SELECT * FROM content_submissions WHERE submission_id = $1",
+            submission_id
+        )
+        
+        if not submission:
+            return {"error": "Submission not found"}
+        
+        # Check if there's a job for this submission
+        job = await pool.fetchrow(
+            "SELECT * FROM job_queue WHERE submission_id::text = $1",
+            submission_id
+        )
+        
+        # Try to manually trigger processing
+        from datetime import datetime
+        content_data = {
+            "title": submission['title'],
+            "description": submission['description'],
+            "tags": submission['tags']
+        }
+        
+        # This will attempt to create policy checks
+        result = await process_content_submission(submission_id, content_data)
+        
+        return {
+            "submission": dict(submission),
+            "job": dict(job) if job else None,
+            "processing_result": result,
+            "message": "Manual processing attempted"
+        }
+    except Exception as e:
+        return {"error": str(e)}
