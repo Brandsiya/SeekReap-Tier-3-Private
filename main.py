@@ -570,3 +570,86 @@ async def debug_check_submission(submission_id: str):
         }
     except Exception as e:
         return {"error": str(e), "type": str(type(e).__name__)}
+
+    # ===== THIS SECTION IS MISSING - ADD IT NOW =====
+    async with db_pool.acquire() as conn:
+        for category, (severity, rules, segments) in checks:
+            check_count += 1
+            total_severity += severity
+            
+            risk_level = calculate_risk_level(severity)
+            recommendation = get_recommendation(severity, category)
+            
+            # Insert policy check
+            check_id = await conn.fetchval("""
+                INSERT INTO policy_checks (
+                    submission_id, policy_category, severity_score,
+                    risk_level, triggered_rules, recommendation
+                ) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+                RETURNING check_id
+            """, submission_id, category, severity, risk_level.value,
+                json.dumps({"rules": rules}), recommendation.value)
+            
+            # Insert flagged segments
+            for segment in segments:
+                await conn.execute("""
+                    INSERT INTO flagged_segments (
+                        check_id, segment_type, text_excerpt,
+                        confidence, suggested_edit
+                    ) VALUES ($1, $2, $3, $4, $5)
+                """, check_id, segment.get("segment_type", "description"),
+                    segment.get("text_excerpt", ""),
+                    segment.get("confidence", 0.5),
+                    segment.get("suggested_edit", ""))
+            
+            all_checks.append({
+                "category": category,
+                "severity": severity,
+                "risk_level": risk_level.value,
+                "recommendation": recommendation.value,
+                "rules": rules
+            })
+    
+    # Calculate overall stats
+    avg_severity = total_severity / max(check_count, 1)
+    overall_risk = calculate_risk_level(avg_severity)
+    
+    # Determine monetization eligibility
+    monetization_eligible = avg_severity < 40
+    age_restriction_likely = avg_severity >= 50
+    limited_views_likely = avg_severity >= 60
+    
+    # Determine final recommendation
+    final_recommendation = get_recommendation(avg_severity, "overall")
+    
+    # Insert submission results
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO submission_results (
+                submission_id, overall_risk, monetization_eligible,
+                age_restriction_likely, limited_views_likely,
+                final_recommendation, summary_notes, completed_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        """, submission_id, overall_risk.value, monetization_eligible,
+            age_restriction_likely, limited_views_likely,
+            final_recommendation.value,
+            f"Processed {check_count} policy checks")
+        
+        # Update submission status
+        await conn.execute("""
+            UPDATE content_submissions
+            SET status = 'complete'
+            WHERE submission_id = $1
+        """, submission_id)
+    
+    print(f"✅ Submission {submission_id} processed. Overall risk: {overall_risk.value}")
+    
+    return {
+        "submission_id": submission_id,
+        "overall_risk": overall_risk.value,
+        "monetization_eligible": monetization_eligible,
+        "age_restriction_likely": age_restriction_likely,
+        "limited_views_likely": limited_views_likely,
+        "final_recommendation": final_recommendation.value,
+        "policy_checks": all_checks
+    }
