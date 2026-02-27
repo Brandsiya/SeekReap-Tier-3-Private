@@ -670,6 +670,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @app.post("/process-envelope")
 @limiter.limit("50 per minute")  # Increased from default
 async def process_envelope(request: Request, envelope: Envelope):
+    pass
     # ... existing code ...
 
 @app.post("/api/process-submission")
