@@ -1,48 +1,81 @@
-#!/usr/bin/env python3
-"""
-SeekReap Tier-3 Decision Engine
-Enhanced with real policy checking and database integration
-"""
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import httpx
 import os
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-import uvicorn
-import asyncpg
 import json
-import re
-from enum import Enum
+import hashlib
+import hmac
+import time
+import asyncio
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Depends, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+import asyncpg
+from asyncpg import Pool
+from dotenv import load_dotenv
+import httpx
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+# Load environment variables
+load_dotenv()
 
 # =====================================================
 # Configuration
 # =====================================================
-app = FastAPI(title="SeekReap Tier-3 Decision Engine")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable not set")
 
-# CORS middleware
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
+# =====================================================
+# Lifespan Manager
+# =====================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("🚀 Tier-3 Private Layer starting up...")
+    app.state.pool = await asyncpg.create_pool(DATABASE_URL, min_size=5, max_size=20)
+    print("✅ Database connection pool created")
+    
+    yield
+    
+    # Shutdown
+    print("🔄 Tier-3 shutting down, closing connections...")
+    await app.state.pool.close()
+    print("✅ Connections closed")
+
+# =====================================================
+# FastAPI App Initialization
+# =====================================================
+app = FastAPI(
+    title="SeekReap Tier-3 Private Layer",
+    description="Decision Engine for Content Moderation",
+    version="3.0.0",
+    lifespan=lifespan
+)
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, restrict this
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Environment variables
-DATABASE_URL = os.getenv("DATABASE_URL")
-TIER4_URL = os.getenv("TIER4_URL", "https://seekreap-tier-4-orchestrator-nrn4.onrender.com")
-PORT = int(os.getenv("PORT", 10001))
-
-# Database connection pool
-db_pool = None
+# Add rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # =====================================================
 # Pydantic Models
 # =====================================================
-
 class Envelope(BaseModel):
     id: str
     timestamp: float
@@ -50,630 +83,494 @@ class Envelope(BaseModel):
     schema_version: str
     orchestration_policy: str
     signature: str
-    metadata: Dict[str, Any]
+    metadata: Optional[Dict[str, Any]] = None
 
-class PolicyCategory(str, Enum):
-    SPAM = "spam_deceptive_scams"
-    SENSITIVE = "sensitive_content"
-    VIOLENT = "violent_extremist"
-    HARMFUL = "harmful_dangerous"
-    MISINFO = "misinformation"
-    COPYRIGHT = "copyright"
-    PRIVACY = "privacy"
-    CHILD_SAFETY = "child_safety"
-    HATE_SPEECH = "hate_speech"
-    HARASSMENT = "harassment_cyberbullying"
-    ADVERTISER = "advertiser_friendly"
+class PolicyCheckRequest(BaseModel):
+    content_id: str
+    content_type: str
+    content_data: Dict[str, Any]
+    check_policies: List[str]
 
-class RiskLevel(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+class PolicyCheckResponse(BaseModel):
+    content_id: str
+    results: Dict[str, Any]
+    timestamp: float
 
-class Recommendation(str, Enum):
-    PROCEED = "proceed"
-    CAUTION = "caution"
-    EDIT_REQUIRED = "edit_required"
-    DO_NOT_UPLOAD = "do_not_upload"
+class AppealIntelligenceRequest(BaseModel):
+    content_id: str
+    violation_type: str
+    channel_history: Optional[Dict[str, Any]] = None
 
-class SegmentType(str, Enum):
-    TIMESTAMP = "timestamp"
-    THUMBNAIL = "thumbnail_region"
-    TITLE = "title"
-    DESCRIPTION = "description"
-    TAG = "tag"
-    CARD = "card"
+class AppealIntelligenceResponse(BaseModel):
+    content_id: str
+    likelihood_score: float
+    defense_strength: str
+    tone_guidance: str
+    mitigation_arguments: List[Dict[str, Any]]
+
+class JobStatusResponse(BaseModel):
+    job_id: int
+    status: str
+    created_at: datetime
+    completed_at: Optional[datetime]
+    failure_reason: Optional[str]
 
 # =====================================================
-# Database Connection
+# Database Helpers
 # =====================================================
+async def get_db() -> Pool:
+    return app.state.pool
 
-async def init_db():
-    """Initialize database connection pool"""
-    global db_pool
-    try:
-        db_pool = await asyncpg.create_pool(DATABASE_URL)
-        print("✅ Database connected successfully")
-        
-        # Test the connection
-        async with db_pool.acquire() as conn:
-            await conn.execute("SELECT 1")
-        print("✅ Database connection test passed")
-    except Exception as e:
-        print(f"❌ Database connection failed: {e}")
-        db_pool = None
+async def get_job_from_db(job_id: int, pool: Pool):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM job_queue WHERE job_id = $1",
+            job_id
+        )
 
-@app.on_event("startup")
-async def startup():
-    await init_db()
-
-@app.on_event("shutdown")
-async def shutdown():
-    if db_pool:
-        await db_pool.close()
-
-# =====================================================
-# Policy Checking Functions
-# =====================================================
-
-async def check_hate_speech(text: str) -> tuple[float, List[Dict]]:
-    """
-    Check text for hate speech patterns
-    Returns: (severity_score, list of triggered rules with segments)
-    """
-    severity = 0
-    triggered_rules = []
-    flagged_segments = []
+async def update_job_status(job_id: int, status: str, result_data: Dict = None, pool: Pool = None):
+    if pool is None:
+        pool = app.state.pool
     
-    # Simple pattern matching for demonstration
-    # In production, you'd use ML models or more sophisticated algorithms
-    hate_patterns = {
-        r'\b(hate|hater|haters?)\b': 30,
-        r'\b(racial|racist|racism)\b': 50,
-        r'\b(slur|offensive)\b': 40,
-        r'\b(discriminat(e|ion|ory))\b': 45,
-        r'\b(attack|targeting)\s+(group|minority|community)\b': 60,
-    }
+    async with pool.acquire() as conn:
+        if status == "completed":
+            await conn.execute(
+                "UPDATE job_queue SET status = $1, completed_at = NOW(), result = $2 WHERE job_id = $3",
+                status, json.dumps(result_data) if result_data else None, job_id
+            )
+        elif status == "failed":
+            await conn.execute(
+                "UPDATE job_queue SET status = $1, failure_reason = $2 WHERE job_id = $3",
+                status, result_data.get("reason") if result_data else "Unknown error", job_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE job_queue SET status = $1, started_at = NOW() WHERE job_id = $2",
+                status, job_id
+            )
+
+# =====================================================
+# Decision Engine Functions
+# =====================================================
+async def analyze_content(content_id: str, content_type: str, content_data: Dict) -> Dict:
+    """
+    Analyze content for policy violations
+    This is where your actual ML models/policy checks would go
+    """
+    # Simulate processing time
+    await asyncio.sleep(1)
     
-    if text:
-        for pattern, weight in hate_patterns.items():
-            matches = re.finditer(pattern, text, re.IGNORECASE)
-            for match in matches:
-                severity += weight
-                triggered_rules.append({
-                    "rule": f"hate_speech_pattern_{pattern}",
-                    "confidence": min(weight / 100, 0.95),
-                    "matched_text": match.group()
+    # Mock analysis results
+    risk_score = 25  # Low risk example
+    policy_matches = []
+    
+    if content_type == "video":
+        # Check video-specific policies
+        if "filename" in content_data:
+            filename = content_data.get("filename", "").lower()
+            if "xvideo" in filename or "porn" in filename:
+                policy_matches.append({
+                    "policy_id": "adult-content-001",
+                    "match_confidence": 0.95,
+                    "details": "Adult content detected in filename"
                 })
-                
-                # Add flagged segment for the matched text
-                start_pos = max(0, match.start() - 20)
-                end_pos = min(len(text), match.end() + 20)
-                flagged_segments.append({
-                    "segment_type": "description",
-                    "text_excerpt": text[start_pos:end_pos],
-                    "confidence": min(weight / 100, 0.95),
-                    "suggested_edit": f"Remove or rephrase offensive language: '{match.group()}'"
-                })
+                risk_score = 85
     
-    return min(severity, 100), triggered_rules, flagged_segments
-
-async def check_copyright(title: str, description: str) -> tuple[float, List[Dict], List[Dict]]:
-    """
-    Simple copyright check based on keywords
-    In production, this would integrate with content ID systems
-    """
-    severity = 0
-    triggered_rules = []
-    flagged_segments = []
+    elif content_type == "url":
+        # Check URL-specific policies
+        url = content_data.get("url", "").lower()
+        if "youtube.com/shorts" in url:
+            # Low risk for YouTube shorts
+            risk_score = 15
     
-    copyright_patterns = {
-        r'\b(copyright|(c)\b|©)\b': 20,
-        r'\b(unauthorized|without permission)\b': 30,
-        r'\b(plagiar(is|e|ism)|stolen)\b': 40,
-        r'\b(third[-\s]party|not mine)\b': 25,
-    }
-    
-    text = f"{title} {description}".lower()
-    
-    for pattern, weight in copyright_patterns.items():
-        matches = re.finditer(pattern, text, re.IGNORECASE)
-        for match in matches:
-            severity += weight
-            triggered_rules.append({
-                "rule": f"copyright_indicator_{pattern}",
-                "confidence": min(weight / 50, 0.9),
-                "matched_text": match.group()
-            })
-    
-    return min(severity, 100), triggered_rules, flagged_segments
-
-async def check_child_safety(title: str, description: str, tags: List[str]) -> tuple[float, List[Dict], List[Dict]]:
-    """
-    Check for child safety concerns
-    """
-    severity = 0
-    triggered_rules = []
-    flagged_segments = []
-    
-    unsafe_patterns = {
-        r'\b(child|minor|kid|underage)\b.*\b(content|video|show)\b': 70,
-        r'\b(age\s*restrict(ed|ion)?)\b': 30,
-        r'\b(family[-\s]friendly|for\s+kids)\b': -20,  # Negative - actually good
-    }
-    
-    text = f"{title} {description}".lower()
-    
-    for pattern, weight in unsafe_patterns.items():
-        matches = re.finditer(pattern, text, re.IGNORECASE)
-        for match in matches:
-            severity += weight
-            if weight > 0:
-                triggered_rules.append({
-                    "rule": f"child_safety_{pattern}",
-                    "confidence": min(abs(weight) / 100, 0.95),
-                    "matched_text": match.group()
-                })
-    
-    # Check tags for kid-related content
-    if tags:
-        kid_tags = ['kids', 'children', 'family', 'educational']
-        if any(tag in kid_tags for tag in tags):
-            severity -= 30  # Lower severity for kid-friendly tags
-    
-    return max(0, min(severity, 100)), triggered_rules, flagged_segments
-
-async def check_advertiser_friendly(title: str, description: str) -> tuple[float, List[Dict], List[Dict]]:
-    """
-    Check if content is advertiser-friendly
-    """
-    severity = 0
-    triggered_rules = []
-    flagged_segments = []
-    
-    advertiser_unfriendly = {
-        r'\b(controversial|offensive|graphic)\b': 40,
-        r'\b(sexual|nudity|explicit)\b': 80,
-        r'\b(violence|blood|gore)\b': 70,
-        r'\b(profanity|swear|cuss)\b': 50,
-        r'\b(drugs|alcohol|smoking)\b': 60,
-    }
-    
-    text = f"{title} {description}".lower()
-    
-    for pattern, weight in advertiser_unfriendly.items():
-        matches = re.finditer(pattern, text, re.IGNORECASE)
-        for match in matches:
-            severity += weight
-            triggered_rules.append({
-                "rule": f"advertiser_unfriendly_{pattern}",
-                "confidence": min(weight / 100, 0.9),
-                "matched_text": match.group()
-            })
-    
-    return min(severity, 100), triggered_rules, flagged_segments
-
-def calculate_risk_level(severity: float) -> RiskLevel:
-    """Convert severity score to risk level"""
-    if severity >= 80:
-        return RiskLevel.CRITICAL
-    elif severity >= 60:
-        return RiskLevel.HIGH
-    elif severity >= 30:
-        return RiskLevel.MEDIUM
+    # Determine risk level
+    if risk_score < 35:
+        risk_level = "Low"
+    elif risk_score < 70:
+        risk_level = "Medium"
     else:
-        return RiskLevel.LOW
-
-def get_recommendation(severity: float, category: str) -> Recommendation:
-    """Determine recommendation based on severity and category"""
-    if severity >= 70:
-        return Recommendation.DO_NOT_UPLOAD
-    elif severity >= 50:
-        return Recommendation.EDIT_REQUIRED
-    elif severity >= 30:
-        return Recommendation.CAUTION
-    else:
-        return Recommendation.PROCEED
-
-# =====================================================
-# Main Processing Function
-# =====================================================
-
-async def process_content_submission(submission_id: str, content_data: Dict):
-    """
-    Process a content submission through all policy checks
-    """
-    print(f"📊 Processing submission: {submission_id}")
-    
-    title = content_data.get("title", "")
-    description = content_data.get("description", "")
-    tags = content_data.get("tags", [])
-    
-    all_checks = []
-    total_severity = 0
-    check_count = 0
-    
-    # Run all policy checks
-    checks = [
-        ("hate_speech", await check_hate_speech(f"{title} {description}")),
-        ("copyright", await check_copyright(title, description)),
-        ("child_safety", await check_child_safety(title, description, tags)),
-        ("advertiser_friendly", await check_advertiser_friendly(title, description)),
-    ]
-    
-    async with db_pool.acquire() as conn:
-        for category, (severity, rules, segments) in checks:
-            check_count += 1
-            total_severity += severity
-            
-            risk_level = calculate_risk_level(severity)
-            recommendation = get_recommendation(severity, category)
-            
-            # Insert policy check
-            check_id = await conn.fetchval("""
-                INSERT INTO policy_checks (
-                    submission_id, policy_category, severity_score,
-                    risk_level, triggered_rules, recommendation
-                ) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-                RETURNING check_id
-            """, submission_id, category, severity, risk_level.value,
-                json.dumps({"rules": rules}), recommendation.value)
-            
-            # Insert flagged segments
-            for segment in segments:
-                await conn.execute("""
-                    INSERT INTO flagged_segments (
-                        check_id, segment_type, text_excerpt,
-                        confidence, suggested_edit
-                    ) VALUES ($1, $2, $3, $4, $5)
-                """, check_id, segment.get("segment_type", "description"),
-                    segment.get("text_excerpt", ""),
-                    segment.get("confidence", 0.5),
-                    segment.get("suggested_edit", ""))
-            
-            all_checks.append({
-                "category": category,
-                "severity": severity,
-                "risk_level": risk_level.value,
-                "recommendation": recommendation.value,
-                "rules": rules
-            })
-    
-    # Calculate overall stats
-    avg_severity = total_severity / max(check_count, 1)
-    overall_risk = calculate_risk_level(avg_severity)
-    
-    # Determine monetization eligibility
-    monetization_eligible = avg_severity < 40
-    age_restriction_likely = avg_severity >= 50
-    limited_views_likely = avg_severity >= 60
-    
-    # Determine final recommendation
-    final_recommendation = get_recommendation(avg_severity, "overall")
-    
-    # Insert submission results
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO submission_results (
-                submission_id, overall_risk, monetization_eligible,
-                age_restriction_likely, limited_views_likely,
-                final_recommendation, summary_notes, completed_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        """, submission_id, overall_risk.value, monetization_eligible,
-            age_restriction_likely, limited_views_likely,
-            final_recommendation.value,
-            f"Processed {check_count} policy checks")
-        
-        # Update submission status
-        await conn.execute("""
-            UPDATE content_submissions
-            SET status = 'complete'
-            WHERE submission_id = $1
-        """, submission_id)
-    
-    print(f"✅ Submission {submission_id} processed. Overall risk: {overall_risk.value}")
+        risk_level = "High"
     
     return {
-        "submission_id": submission_id,
-        "overall_risk": overall_risk.value,
-        "monetization_eligible": monetization_eligible,
-        "age_restriction_likely": age_restriction_likely,
-        "limited_views_likely": limited_views_likely,
-        "final_recommendation": final_recommendation.value,
-        "policy_checks": all_checks
-    }
-
-# =====================================================
-# API Endpoints
-# =====================================================
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    db_status = "connected" if db_pool else "disconnected"
-    return {
-        "status": "healthy",
-        "tier": 3,
-        "database": db_status,
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "status": "Tier-3 Private Layer running",
-        "version": "3.0.0",
-        "features": [
-            "Hate Speech Detection",
-            "Copyright Checking",
-            "Child Safety Analysis",
-            "Advertiser-Friendly Scoring"
+        "content_id": content_id,
+        "overall_risk_score": risk_score,
+        "risk_level": risk_level,
+        "policy_matches": policy_matches,
+        "recommended_actions": [
+            "Monitor content for 24 hours",
+            "No immediate action required"
+        ] if risk_score < 70 else [
+            "Flag for manual review",
+            "Restrict monetization pending review"
         ]
     }
 
+async def generate_appeal_intelligence(content_id: str, violation_type: str, channel_history: Dict = None) -> Dict:
+    """
+    Generate appeal intelligence for a content violation
+    """
+    # Simulate processing
+    await asyncio.sleep(0.5)
+    
+    likelihood_score = 72
+    defense_strength = "Medium"
+    
+    if violation_type == "adult-content":
+        defense_strength = "Weak"
+        likelihood_score = 35
+    elif violation_type == "copyright":
+        defense_strength = "Strong"
+        likelihood_score = 85
+    
+    return {
+        "content_id": content_id,
+        "likelihood_score": likelihood_score,
+        "defense_strength": defense_strength,
+        "tone_guidance": "Professional and factual",
+        "mitigation_arguments": [
+            {
+                "argument_text": "Content was misclassified by automated system",
+                "supporting_evidence": ["Similar content was approved", "Context of content"]
+            },
+            {
+                "argument_text": "We have taken steps to improve our content",
+                "supporting_evidence": ["Channel history shows compliance"]
+            }
+        ]
+    }
+
+# =====================================================
+# Health Check Endpoint
+# =====================================================
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    try:
+        # Test database connection
+        pool = app.state.pool
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        
+        return {
+            "status": "healthy",
+            "tier": 3,
+            "database": "connected",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "unhealthy",
+                "tier": 3,
+                "database": "disconnected",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+# =====================================================
+# Root Endpoint
+# =====================================================
+@app.get("/")
+async def root():
+    """Root endpoint with service information"""
+    return {
+        "service": "SeekReap Tier-3 Private Layer",
+        "version": "3.0.0",
+        "description": "Decision Engine for Content Moderation",
+        "features": [
+            "Content Policy Checking",
+            "Appeal Intelligence Generation",
+            "Job Status Tracking"
+        ]
+    }
+
+# =====================================================
+# Job Status Endpoint
+# =====================================================
+@app.get("/api/job/{job_id}", response_model=JobStatusResponse)
+@limiter.limit("100 per minute")
+async def get_job_status(request: Request, job_id: int):
+    """Get the status of a specific job"""
+    pool = app.state.pool
+    job = await get_job_from_db(job_id, pool)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return JobStatusResponse(
+        job_id=job["job_id"],
+        status=job["status"],
+        created_at=job["created_at"],
+        completed_at=job["completed_at"],
+        failure_reason=job["failure_reason"]
+    )
+
+# =====================================================
+# Process Envelope Endpoint
+# =====================================================
 @app.post("/process-envelope")
-async def process_envelope(envelope: Envelope):
-    """
-    Process an envelope containing content for policy checking
-    """
-    print(f"\n📦 Processing envelope: {envelope.id}")
-    print(f"   Policy: {envelope.orchestration_policy}")
+@limiter.limit("50 per minute")
+async def process_envelope(request: Request, envelope: Envelope):
+    """Process an incoming envelope from Tier-2/Tier-4"""
+    print(f"📦 Received envelope: {envelope.id}")
     
     try:
-        # Extract submission_id from payload if present
-        submission_id = envelope.payload.get("submission_id")
-        content_data = envelope.payload.get("content_data", {})
+        # Extract job information from payload
+        job_data = envelope.payload
+        job_id = job_data.get("job_id")
+        content_id = job_data.get("content_id")
+        content_type = job_data.get("job_type", "video")
+        params = job_data.get("params", {})
         
-        if not submission_id:
-            return {
-                "decision": "ERROR",
-                "confidence": 0,
-                "risk_factors": ["No submission_id provided"],
-                "appeal_text": None
-            }
+        if not job_id:
+            raise HTTPException(status_code=400, detail="Missing job_id in payload")
         
-        # Process the submission
-        result = await process_content_submission(submission_id, content_data)
+        print(f"   Processing job {job_id}: {content_id} ({content_type})")
         
-        # Format response for Tier-4
+        # Update job status to processing
+        await update_job_status(job_id, "processing")
+        
+        # Analyze content
+        analysis_result = await analyze_content(content_id, content_type, params)
+        
+        # Store result in database
+        await update_job_status(job_id, "completed", analysis_result)
+        
+        print(f"   ✅ Job {job_id} completed. Risk score: {analysis_result['overall_risk_score']}")
+        
         return {
-            "decision": result["final_recommendation"].upper(),
-            "confidence": 1 - (result.get("overall_risk_score", 50) / 100),
-            "risk_factors": [
-                f"{check['category']}: {check['risk_level']} ({check['severity']:.0f})"
-                for check in result["policy_checks"][:3]  # Top 3 risk factors
-            ],
-            "appeal_text": None,
-            "details": result
+            "job_id": job_id,
+            "decision": analysis_result["risk_level"],
+            "risk_score": analysis_result["overall_risk_score"],
+            "details": analysis_result
         }
         
     except Exception as e:
-        print(f"❌ Error processing envelope: {e}")
-        return {
-            "decision": "ERROR",
-            "confidence": 0,
-            "risk_factors": [str(e)],
-            "appeal_text": None
-        }
-
-@app.post("/api/process-submission")
-async def api_process_submission(request: Request):
-    """
-    Direct API endpoint for processing submissions
-    """
-    try:
-        data = await request.json()
-        submission_id = data.get("submission_id")
-        content_data = data.get("content_data", {})
+        print(f"   ❌ Error processing envelope: {str(e)}")
+        # Update job status to failed
+        if 'job_id' in locals():
+            await update_job_status(job_id, "failed", {"reason": str(e)})
         
-        if not submission_id:
-            raise HTTPException(status_code=400, detail="submission_id required")
-        
-        result = await process_content_submission(submission_id, content_data)
-        return result
-        
-    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/policy-categories")
-async def get_policy_categories():
-    """Get list of all policy categories"""
-    return {
-        "categories": [category.value for category in PolicyCategory]
-    }
-
 # =====================================================
-# Main
+# API Process Submission Endpoint
 # =====================================================
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
-
-# Add after the process_content_submission function
-@app.get("/debug/check-submission/{submission_id}")
-async def debug_check_submission(submission_id: str):
-    """Debug why a submission isn't getting policy checks"""
-    try:
-        # Check if submission exists
-        submission = await pool.fetchrow(
-            "SELECT * FROM content_submissions WHERE submission_id = $1",
-            submission_id
-        )
-        
-        if not submission:
-            return {"error": "Submission not found"}
-        
-        # Check if there's a job for this submission
-        job = await pool.fetchrow(
-            "SELECT * FROM job_queue WHERE submission_id::text = $1",
-            submission_id
-        )
-        
-        # Try to manually trigger processing
-        from datetime import datetime
-        content_data = {
-            "title": submission['title'],
-            "description": submission['description'],
-            "tags": submission['tags']
-        }
-        
-        # This will attempt to create policy checks
-        result = await process_content_submission(submission_id, content_data)
-        
-        return {
-            "submission": dict(submission),
-            "job": dict(job) if job else None,
-            "processing_result": result,
-            "message": "Manual processing attempted"
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-# Replace the debug endpoint with corrected version
-@app.get("/debug/check-submission/{submission_id}")
-async def debug_check_submission(submission_id: str):
-    """Debug why a submission isn't getting policy checks"""
-    try:
-        # Check if submission exists - use db_pool, not pool!
-        submission = await db_pool.fetchrow(
-            "SELECT * FROM content_submissions WHERE submission_id = $1",
-            submission_id
-        )
-        
-        if not submission:
-            return {"error": "Submission not found"}
-        
-        # Check if there's a job for this submission
-        job = await db_pool.fetchrow(
-            "SELECT * FROM job_queue WHERE submission_id::text = $1",
-            submission_id
-        )
-        
-        # Try to manually trigger processing
-        content_data = {
-            "title": submission['title'],
-            "description": submission['description'],
-            "tags": submission['tags']
-        }
-        
-        # This will attempt to create policy checks
-        result = await process_content_submission(submission_id, content_data)
-        
-        return {
-            "submission": dict(submission),
-            "job": dict(job) if job else None,
-            "processing_result": result,
-            "message": "Manual processing attempted",
-            "db_pool_status": "connected"
-        }
-    except Exception as e:
-        return {"error": str(e), "type": str(type(e).__name__)}
-
-    # ===== THIS SECTION IS MISSING - ADD IT NOW =====
-    async with db_pool.acquire() as conn:
-        for category, (severity, rules, segments) in checks:
-            check_count += 1
-            total_severity += severity
-            
-            risk_level = calculate_risk_level(severity)
-            recommendation = get_recommendation(severity, category)
-            
-            # Insert policy check
-            check_id = await conn.fetchval("""
-                INSERT INTO policy_checks (
-                    submission_id, policy_category, severity_score,
-                    risk_level, triggered_rules, recommendation
-                ) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-                RETURNING check_id
-            """, submission_id, category, severity, risk_level.value,
-                json.dumps({"rules": rules}), recommendation.value)
-            
-            # Insert flagged segments
-            for segment in segments:
-                await conn.execute("""
-                    INSERT INTO flagged_segments (
-                        check_id, segment_type, text_excerpt,
-                        confidence, suggested_edit
-                    ) VALUES ($1, $2, $3, $4, $5)
-                """, check_id, segment.get("segment_type", "description"),
-                    segment.get("text_excerpt", ""),
-                    segment.get("confidence", 0.5),
-                    segment.get("suggested_edit", ""))
-            
-            all_checks.append({
-                "category": category,
-                "severity": severity,
-                "risk_level": risk_level.value,
-                "recommendation": recommendation.value,
-                "rules": rules
-            })
-    
-    # Calculate overall stats
-    avg_severity = total_severity / max(check_count, 1)
-    overall_risk = calculate_risk_level(avg_severity)
-    
-    # Determine monetization eligibility
-    monetization_eligible = avg_severity < 40
-    age_restriction_likely = avg_severity >= 50
-    limited_views_likely = avg_severity >= 60
-    
-    # Determine final recommendation
-    final_recommendation = get_recommendation(avg_severity, "overall")
-    
-    # Insert submission results
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO submission_results (
-                submission_id, overall_risk, monetization_eligible,
-                age_restriction_likely, limited_views_likely,
-                final_recommendation, summary_notes, completed_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        """, submission_id, overall_risk.value, monetization_eligible,
-            age_restriction_likely, limited_views_likely,
-            final_recommendation.value,
-            f"Processed {check_count} policy checks")
-        
-        # Update submission status
-        await conn.execute("""
-            UPDATE content_submissions
-            SET status = 'complete'
-            WHERE submission_id = $1
-        """, submission_id)
-    
-    print(f"✅ Submission {submission_id} processed. Overall risk: {overall_risk.value}")
-    
-    return {
-        "submission_id": submission_id,
-        "overall_risk": overall_risk.value,
-        "monetization_eligible": monetization_eligible,
-        "age_restriction_likely": age_restriction_likely,
-        "limited_views_likely": limited_views_likely,
-        "final_recommendation": final_recommendation.value,
-        "policy_checks": all_checks
-    }
-
-# =====================================================
-# Rate Limiting Configuration
-# =====================================================
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-
-# Initialize limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["100 per minute"])
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Apply rate limiting to endpoints
-@app.post("/process-envelope")
-@limiter.limit("50 per minute")  # Increased from default
-async def process_envelope(request: Request, envelope: Envelope):
-    pass
-    # ... existing code ...
-
 @app.post("/api/process-submission")
-@limiter.limit("50 per minute")  # Increased from default
+@limiter.limit("50 per minute")
 async def api_process_submission(request: Request):
-    # ... existing code ...
+    """API endpoint to process a submission directly"""
+    print("📝 Received API process submission request")
+    
+    try:
+        body = await request.json()
+        job_id = body.get("job_id")
+        content_id = body.get("content_id")
+        content_type = body.get("job_type", "video")
+        params = body.get("params", {})
+        
+        if not job_id or not content_id:
+            raise HTTPException(status_code=400, detail="Missing job_id or content_id")
+        
+        print(f"   Processing job {job_id}: {content_id} ({content_type})")
+        
+        # Update job status to processing
+        await update_job_status(job_id, "processing")
+        
+        # Analyze content
+        analysis_result = await analyze_content(content_id, content_type, params)
+        
+        # Store result in database
+        await update_job_status(job_id, "completed", analysis_result)
+        
+        print(f"   ✅ Job {job_id} completed. Risk score: {analysis_result['overall_risk_score']}")
+        
+        return {
+            "success": True,
+            "job_id": job_id,
+            "decision": analysis_result["risk_level"],
+            "risk_score": analysis_result["overall_risk_score"],
+            "analysis": analysis_result
+        }
+        
+    except Exception as e:
+        print(f"   ❌ Error processing submission: {str(e)}")
+        if 'job_id' in locals():
+            await update_job_status(job_id, "failed", {"reason": str(e)})
+        
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================
+# Policy Check Endpoint
+# =====================================================
+@app.post("/api/policy-check", response_model=PolicyCheckResponse)
+@limiter.limit("50 per minute")
+async def policy_check(request: Request, check_request: PolicyCheckRequest):
+    """Check content against specific policies"""
+    print(f"🔍 Policy check requested for {check_request.content_id}")
+    
+    try:
+        # Analyze content (reusing the analysis function)
+        analysis_result = await analyze_content(
+            check_request.content_id,
+            check_request.content_type,
+            check_request.content_data
+        )
+        
+        # Filter results to requested policies if specified
+        if check_request.check_policies and check_request.check_policies != ["all"]:
+            filtered_matches = [
+                match for match in analysis_result.get("policy_matches", [])
+                if match["policy_id"] in check_request.check_policies
+            ]
+            analysis_result["policy_matches"] = filtered_matches
+        
+        return PolicyCheckResponse(
+            content_id=check_request.content_id,
+            results=analysis_result,
+            timestamp=time.time()
+        )
+        
+    except Exception as e:
+        print(f"   ❌ Policy check failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================
+# Appeal Intelligence Endpoint
+# =====================================================
+@app.post("/api/appeal-intelligence", response_model=AppealIntelligenceResponse)
+@limiter.limit("30 per minute")
+async def appeal_intelligence(request: Request, appeal_request: AppealIntelligenceRequest):
+    """Generate appeal intelligence for a content violation"""
+    print(f"⚖️ Appeal intelligence requested for {appeal_request.content_id}")
+    
+    try:
+        intelligence = await generate_appeal_intelligence(
+            appeal_request.content_id,
+            appeal_request.violation_type,
+            appeal_request.channel_history
+        )
+        
+        return AppealIntelligenceResponse(
+            content_id=intelligence["content_id"],
+            likelihood_score=intelligence["likelihood_score"],
+            defense_strength=intelligence["defense_strength"],
+            tone_guidance=intelligence["tone_guidance"],
+            mitigation_arguments=intelligence["mitigation_arguments"]
+        )
+        
+    except Exception as e:
+        print(f"   ❌ Appeal intelligence generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================
+# Batch Process Endpoint
+# =====================================================
+@app.post("/api/batch-process")
+@limiter.limit("20 per minute")
+async def batch_process(request: Request):
+    """Process multiple jobs in batch"""
+    print("📚 Batch process request received")
+    
+    try:
+        body = await request.json()
+        jobs = body.get("jobs", [])
+        
+        if not jobs:
+            raise HTTPException(status_code=400, detail="No jobs provided")
+        
+        results = []
+        for job in jobs:
+            job_id = job.get("job_id")
+            content_id = job.get("content_id")
+            content_type = job.get("job_type", "video")
+            params = job.get("params", {})
+            
+            if not job_id or not content_id:
+                results.append({
+                    "job_id": job_id,
+                    "success": False,
+                    "error": "Missing job_id or content_id"
+                })
+                continue
+            
+            try:
+                # Analyze content
+                analysis_result = await analyze_content(content_id, content_type, params)
+                
+                # Update job status
+                await update_job_status(job_id, "completed", analysis_result)
+                
+                results.append({
+                    "job_id": job_id,
+                    "success": True,
+                    "decision": analysis_result["risk_level"],
+                    "risk_score": analysis_result["overall_risk_score"]
+                })
+                
+            except Exception as e:
+                results.append({
+                    "job_id": job_id,
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        return {
+            "batch_id": f"batch-{int(time.time())}",
+            "total": len(jobs),
+            "successful": sum(1 for r in results if r["success"]),
+            "failed": sum(1 for r in results if not r["success"]),
+            "results": results
+        }
+        
+    except Exception as e:
+        print(f"   ❌ Batch processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================
+# Database Status Endpoint
+# =====================================================
+@app.get("/api/db-status")
+@limiter.limit("10 per minute")
+async def db_status(request: Request):
+    """Check database connection and stats"""
+    try:
+        pool = app.state.pool
+        async with pool.acquire() as conn:
+            # Get connection stats
+            version = await conn.fetchval("SELECT version()")
+            job_count = await conn.fetchval("SELECT COUNT(*) FROM job_queue")
+            pending_count = await conn.fetchval("SELECT COUNT(*) FROM job_queue WHERE status = 'pending'")
+            completed_count = await conn.fetchval("SELECT COUNT(*) FROM job_queue WHERE status = 'completed'")
+            failed_count = await conn.fetchval("SELECT COUNT(*) FROM job_queue WHERE status = 'failed'")
+        
+        return {
+            "status": "connected",
+            "database": "PostgreSQL",
+            "version": version.split()[0] if version else "unknown",
+            "stats": {
+                "total_jobs": job_count,
+                "pending": pending_count,
+                "completed": completed_count,
+                "failed": failed_count
+            }
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "disconnected",
+                "error": str(e)
+            }
+        )
+
+# =====================================================
+# Run the application (for development)
+# =====================================================
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
