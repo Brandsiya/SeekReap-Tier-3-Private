@@ -574,3 +574,91 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+
+# Add debug endpoint to test analyze_content directly
+@app.post("/debug/test-analyze")
+async def debug_analyze(request: Request):
+    """Test the analyze_content function directly"""
+    try:
+        body = await request.json()
+        content_id = body.get("content_id", "test-123")
+        content_type = body.get("content_type", "video")
+        params = body.get("params", {})
+        
+        print(f"🔍 Debug: Calling analyze_content with: content_id={content_id}, content_type={content_type}")
+        print(f"🔍 Debug: params={params}")
+        
+        result = await analyze_content(content_id, content_type, params)
+        
+        print(f"🔍 Debug: analyze_content returned: {result}")
+        return {
+            "success": True,
+            "result": result
+        }
+    except Exception as e:
+        print(f"🔍 Debug: analyze_content error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, 500
+
+# Also add better error handling in process_envelope
+# Let's modify the existing process_envelope function to catch and log errors better
+
+# Improved process_envelope with better error handling
+@app.post("/process-envelope-v2")
+@limiter.limit("50 per minute")
+async def process_envelope_v2(request: Request, envelope: Envelope):
+    """Process an incoming envelope with better error handling"""
+    print(f"📦 Received envelope: {envelope.id}")
+    
+    try:
+        # Extract data from envelope
+        payload = envelope.payload
+        job_id = payload.get("job_id")
+        content_id = payload.get("content_id", f"content-{job_id}")
+        content_type = payload.get("job_type", "video")
+        params = payload.get("params", {})
+        
+        if not job_id:
+            raise HTTPException(status_code=400, detail="Missing job_id in payload")
+        
+        print(f"   Processing job {job_id}: {content_id} ({content_type})")
+        
+        # Update job status to processing
+        await update_job_status(job_id, "processing")
+        
+        # Analyze content with try/catch
+        try:
+            print(f"   Calling analyze_content...")
+            analysis_result = await analyze_content(content_id, content_type, params)
+            print(f"   analyze_content succeeded: {analysis_result}")
+        except Exception as e:
+            print(f"   ❌ analyze_content failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            await update_job_status(job_id, "failed", {"reason": str(e)})
+            raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        
+        # Store result in database
+        await update_job_status(job_id, "completed", analysis_result)
+        
+        print(f"   ✅ Job {job_id} completed. Risk score: {analysis_result['overall_risk_score']}")
+        
+        return {
+            "job_id": job_id,
+            "decision": analysis_result["risk_level"],
+            "risk_score": analysis_result["overall_risk_score"],
+            "details": analysis_result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"   ❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
