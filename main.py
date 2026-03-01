@@ -332,10 +332,8 @@ async def process_envelope(request: Request, envelope: Envelope):
         # Update job status to processing
         await update_job_status(job_id, "processing")
         
-        # Analyze content
-        # Store result in database
-        # This line moved down
-        # This line moved up
+        # Analyze content first
+        analysis_result = await analyze_content(content_id, content_type, params)
         
         # Store result in database
         await update_job_status(job_id, "completed", analysis_result)
