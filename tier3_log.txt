@@ -1,2 +1,0 @@
-nohup: ignoring input
-WARNING:  You must pass the application as an import string to enable 'reload' or 'workers'.

@@ -1,0 +1,15 @@
+--- main.py.bak2026-03-01 09:44:07.000000000 +0000
++++ main.py2026-03-01 09:44:07.000000000 +0000
+@@ -334,10 +334,10 @@
+         # Update job status to processing
+         await update_job_status(job_id, "processing")
+         
+-        # Analyze content
+-        # Store result in database
+-        await update_job_status(job_id, "completed", analysis_result)
++        # Analyze content first
+         analysis_result = await analyze_content(content_id, content_type, params)
++        # Store result in database
++        await update_job_status(job_id, "completed", analysis_result)
+         
+         print(f"   ✅ Job {job_id} completed. Risk score: {analysis_result['overall_risk_score']}")

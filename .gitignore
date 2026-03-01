@@ -64,3 +64,6 @@ __pycache__/
 
 # Virtual environments
 venv*/
+*.log
+*.out
+archive/
