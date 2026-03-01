@@ -1,14 +1,20 @@
-# 🏢 SEEKREAP TIER-3: PRIVATE SEMANTIC LAYER
+# 🧠 SeekReap Tier-3 Core Engine
+**Core Role:** The central intelligence layer. Handles semantic processing, scoring engines, and envelope consumption.
 
-## 🚨 CONFIDENTIAL & PROPRIETARY
-This repository contains proprietary semantic processing, scoring, and business logic.
-**DO NOT MAKE PUBLIC** - contains monetizable intellectual property.
+## 🛠 Tech Stack
+- **Language:** Python 3.x
+- **Dependency Management:** `pyproject.toml` / `requirements.txt`
+- **Primary Entry:** `main.py`
 
-## 🎯 ARCHITECTURE OVERVIEW
-```
-TIER-1 (Public) → Atomic behaviors only
-    ↓
-TIER-2 (Public) → Semantic-neutral workflow → Opaque envelopes
-    ↓
-TIER-3 (Private) → Semantic processing, scoring, monetization
-```
+## 🛰️ Ecosystem Position
+- **From Tier-5:** Receives processed data payloads.
+- **To Tier-4:** Feeds validated and scored results to the Orchestrator for final delivery.
+
+## ⚙️ Key Modules
+- `semantic_processors/`: Natural language and data extraction logic.
+- `scoring_engines/`: Proprietary algorithms for data validation.
+- `envelope_consumers/`: Logic for ingesting Tier-5 outputs.
+
+## 🧪 Setup
+`pip install -r requirements.txt`
+`python main.py`
