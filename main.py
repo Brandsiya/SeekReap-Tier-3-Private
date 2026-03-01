@@ -106,3 +106,17 @@ async def get_job(job_id: int):
         return data
     finally:
         await conn.close()
+
+@app.get("/health")
+async def health_check():
+    try:
+        # Quick DB check
+        conn = await get_db_conn()
+        await conn.execute("SELECT 1")
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        print(f"❌ Health Check Failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
+    finally:
+        if 'conn' in locals():
+            await conn.close()
