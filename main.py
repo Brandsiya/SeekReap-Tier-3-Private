@@ -24,25 +24,6 @@ async def get_db_conn():
         raise Exception("DATABASE_URL not set")
     return await asyncpg.connect(DATABASE_URL)
 
-async def update_job_status(job_id: int, status: str, result: dict = None):
-    """Update job status - assumes job already exists"""
-    conn = await get_db_conn()
-    try:
-        if result:
-            await conn.execute("""
-                UPDATE job_queue 
-                SET status = $1, result = $2, completed_at = NOW() 
-                WHERE job_id = $3
-            """, status, json.dumps(result), job_id)
-        else:
-            await conn.execute("""
-                UPDATE job_queue 
-                SET status = $1, started_at = NOW() 
-                WHERE job_id = $2
-            """, status, job_id)
-    finally:
-        await conn.close()
-
 async def analyze_content(content_id: str, content_type: str, params: dict):
     """Simulated content analysis"""
     await asyncio.sleep(0.5)
@@ -59,7 +40,7 @@ async def process_envelope(request: Request, envelope: Envelope):
     print(f"📦 Processing Envelope: {envelope.id}")
     
     payload = envelope.payload
-    temp_job_id = payload.get("job_id")  # This is the timestamp from Tier-4
+    temp_job_id = payload.get("job_id")
     
     if not temp_job_id:
         raise HTTPException(status_code=400, detail="Missing job_id")
@@ -71,20 +52,26 @@ async def process_envelope(request: Request, envelope: Envelope):
     
     conn = await get_db_conn()
     try:
-        # STEP 1: Create the job record FIRST and get the REAL database ID
+        # Create params JSON object
+        params_json = json.dumps({
+            "url": content_url,
+            "creator_id": creator_id
+        })
+        
+        # STEP 1: Create the job record - use params JSONB, no separate url column
         real_job_id = await conn.fetchval("""
             INSERT INTO job_queue (
-                status, 
-                params, 
-                job_type, 
+                status,
+                params,
+                job_type,
                 content_id,
                 creator_id,
                 created_at
             ) VALUES ($1, $2, $3, $4, $5, NOW())
             RETURNING job_id
-        """, 
-            "processing", 
-            json.dumps({"url": content_url, "creator_id": creator_id}), 
+        """,
+            "processing",
+            params_json,
             payload.get("job_type", "url"),
             content_url,
             creator_id
@@ -97,16 +84,16 @@ async def process_envelope(request: Request, envelope: Envelope):
         
         # STEP 3: Update the job with results
         await conn.execute("""
-            UPDATE job_queue 
-            SET status = 'completed', 
-                result = $1, 
-                completed_at = NOW() 
+            UPDATE job_queue
+            SET status = 'completed',
+                result = $1,
+                completed_at = NOW()
             WHERE job_id = $2
         """, json.dumps(analysis), real_job_id)
         
-        # STEP 4: Return the REAL database ID to Tier-4
+        # STEP 4: Return the REAL database ID
         return {
-            "job_id": real_job_id,  # This is what the frontend needs!
+            "job_id": real_job_id,
             "decision": analysis["risk_level"],
             "risk_score": analysis["overall_risk_score"],
             "details": analysis
@@ -114,13 +101,12 @@ async def process_envelope(request: Request, envelope: Envelope):
         
     except Exception as e:
         print(f"❌ Error: {str(e)}")
-        # Try to mark as failed if we have a real_job_id
         if 'real_job_id' in locals():
             try:
                 await conn.execute("""
-                    UPDATE job_queue 
-                    SET status = 'failed', 
-                        failure_reason = $1 
+                    UPDATE job_queue
+                    SET status = 'failed',
+                        failure_reason = $1
                     WHERE job_id = $2
                 """, str(e), real_job_id)
             except:
