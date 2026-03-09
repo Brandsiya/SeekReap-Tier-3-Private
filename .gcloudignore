@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.env
+venv
+venv_t3/
+logs/
+archive/
+tests/
+docs/
+examples/
