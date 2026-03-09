@@ -587,3 +587,16 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+
+@app.get("/health/db")
+async def health_db():
+    try:
+        # Test database connection
+        import psycopg2
+        import os
+        DATABASE_URL = os.getenv('DATABASE_URL')
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.close()
+        return {"status": "healthy", "database": "connected", "tier": 3}
+    except Exception as e:
+        return {"status": "unhealthy", "database": str(e), "tier": 3}, 500
