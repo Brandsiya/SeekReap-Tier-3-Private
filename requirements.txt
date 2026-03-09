@@ -1,4 +1,8 @@
 fastapi
-uvicorn
-requests
+uvicorn[standard]
+asyncpg
+httpx
+slowapi
+python-dotenv
+pydantic
 psycopg2-binary
