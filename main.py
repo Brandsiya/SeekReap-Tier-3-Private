@@ -152,57 +152,131 @@ async def update_job_status(job_id: int, status: str, result_data: Dict = None, 
 # =====================================================
 # Decision Engine Functions
 # =====================================================
+async def _fetch_youtube_metadata(url: str) -> dict:
+    """Fetch video metadata via YouTube oEmbed (no API key required)."""
+    try:
+        oembed_url = f"https://www.youtube.com/oembed?url={url}&format=json"
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(oembed_url)
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception as e:
+        print(f"oEmbed fetch failed: {e}")
+    return {}
+
+
+# Policy signal definitions
+_HIGH_RISK_KEYWORDS = [
+    "porn", "xxx", "nsfw", "onlyfans", "sex tape", "nude", "naked",
+    "explicit", "adult content", "18+", "hentai", "erotic",
+]
+_MEDIUM_RISK_KEYWORDS = [
+    "clickbait", "shocking", "exposed", "banned",
+    "controversial", "drama", "beef", "scam", "fake", "fraud",
+    "violence", "fight", "assault", "weapon", "gun", "knife",
+    "drug", "weed", "cocaine", "casino", "gambling", "bet",
+    "hack", "crack", "pirate", "leaked", "stolen",
+]
+_LOW_RISK_BONUS_SIGNALS = [
+    "tutorial", "how to", "review", "unboxing", "vlog", "cooking",
+    "music", "official", "ft.", "feat.", "lyric", "lyrics",
+    "educational", "learn", "course", "lecture",
+]
+
+
+def _score_text(text: str) -> tuple:
+    """Returns (risk_delta, policy_matches) from analysing a text string."""
+    text_lower = text.lower()
+    matches = []
+    delta = 0
+
+    for kw in _HIGH_RISK_KEYWORDS:
+        if kw in text_lower:
+            delta += 40
+            matches.append({
+                "policy_id": "high-risk-content",
+                "keyword": kw,
+                "match_confidence": 0.90,
+                "details": f"High-risk keyword detected: '{kw}'",
+            })
+
+    for kw in _MEDIUM_RISK_KEYWORDS:
+        if kw in text_lower:
+            delta += 15
+            matches.append({
+                "policy_id": "medium-risk-content",
+                "keyword": kw,
+                "match_confidence": 0.75,
+                "details": f"Medium-risk keyword detected: '{kw}'",
+            })
+
+    for kw in _LOW_RISK_BONUS_SIGNALS:
+        if kw in text_lower:
+            delta -= 5
+
+    return delta, matches
+
+
 async def analyze_content(content_id: str, content_type: str, content_data: Dict) -> Dict:
     """
-    Analyze content for policy violations
-    This is where your actual ML models/policy checks would go
+    Analyze content for policy violations.
+    For YouTube URLs: fetches real metadata via oEmbed and runs keyword/signal checks.
     """
-    # Simulate processing time
-    await asyncio.sleep(1)
-    
-    # Mock analysis results
-    risk_score = 25  # Low risk example
+    base_score = 20
     policy_matches = []
-    
-    if content_type == "video":
-        # Check video-specific policies
-        if "filename" in content_data:
-            filename = content_data.get("filename", "").lower()
-            if "xvideo" in filename or "porn" in filename:
-                policy_matches.append({
-                    "policy_id": "adult-content-001",
-                    "match_confidence": 0.95,
-                    "details": "Adult content detected in filename"
-                })
-                risk_score = 85
-    
-    elif content_type == "url":
-        # Check URL-specific policies
-        url = content_data.get("url", "").lower()
-        if "youtube.com/shorts" in url:
-            # Low risk for YouTube shorts
-            risk_score = 15
-    
-    # Determine risk level
+    metadata = {}
+    title = ""
+    channel = ""
+
+    url = content_data.get("url", "")
+
+    if url and ("youtube.com" in url or "youtu.be" in url):
+        metadata = await _fetch_youtube_metadata(url)
+        title   = metadata.get("title", "")
+        channel = metadata.get("author_name", "")
+
+        for field in [title, channel]:
+            if field:
+                delta, matches = _score_text(field)
+                base_score += delta
+                policy_matches.extend(matches)
+
+        if "shorts" in url.lower():
+            base_score = max(base_score - 10, 5)
+
+        if any(s in channel.lower() for s in ["official", "vevo", "records", "music"]):
+            base_score = max(base_score - 8, 5)
+
+    elif content_type == "video":
+        filename = content_data.get("filename", "")
+        if filename:
+            delta, matches = _score_text(filename)
+            base_score += delta
+            policy_matches.extend(matches)
+
+    risk_score = max(0, min(100, base_score))
+
     if risk_score < 35:
         risk_level = "Low"
+        actions = ["Monitor content for 24 hours", "No immediate action required"]
     elif risk_score < 70:
         risk_level = "Medium"
+        actions = ["Schedule manual review within 48 hours", "Monitor engagement patterns"]
     else:
         risk_level = "High"
-    
+        actions = ["Flag for immediate manual review", "Restrict monetization pending review"]
+
     return {
-        "content_id": content_id,
-        "overall_risk_score": risk_score,
-        "risk_level": risk_level,
-        "policy_matches": policy_matches,
-        "recommended_actions": [
-            "Monitor content for 24 hours",
-            "No immediate action required"
-        ] if risk_score < 70 else [
-            "Flag for manual review",
-            "Restrict monetization pending review"
-        ]
+        "content_id":          content_id,
+        "overall_risk_score":  risk_score,
+        "risk_level":          risk_level,
+        "policy_matches":      policy_matches,
+        "recommended_actions": actions,
+        "metadata": {
+            "title":   title,
+            "channel": channel,
+            "url":     url,
+        },
     }
 
 async def generate_appeal_intelligence(content_id: str, violation_type: str, channel_history: Dict = None) -> Dict:
