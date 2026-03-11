@@ -371,6 +371,30 @@ async def process_envelope(request: Request, envelope: Envelope):
 # =====================================================
 # API Process Submission Endpoint
 # =====================================================
+@app.post("/api/analyze")
+@limiter.limit("100 per minute")
+async def api_analyze(request: Request):
+    """Lightweight analyze endpoint — skips job_queue, returns results directly."""
+    try:
+        body         = await request.json()
+        submission_id = body.get("submission_id", "unknown")
+        content_id   = body.get("content_id", submission_id)
+        content_type = body.get("job_type", "url")
+        params       = body.get("params", {})
+
+        result = await analyze_content(content_id, content_type, params)
+
+        return {
+            "success":    True,
+            "job_id":     submission_id,
+            "decision":   result["risk_level"],
+            "risk_score": result["overall_risk_score"],
+            "analysis":   result,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/process-submission")
 @limiter.limit("50 per minute")
 async def api_process_submission(request: Request):
