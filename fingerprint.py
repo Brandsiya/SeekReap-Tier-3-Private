@@ -105,11 +105,20 @@ def run_fingerprint(
         conn = psycopg2.connect(DB_URL)
         cur  = conn.cursor()
 
-        cur.execute(
-            "SELECT id, content_url, visual_phash FROM fingerprints "
-            "WHERE visual_phash IS NOT NULL AND submission_id != %s",
-            (submission_id,)
-        )
+        # Only filter by submission_id if it's a valid UUID
+        import uuid as _uv
+        try:
+            _uv.UUID(submission_id)
+            cur.execute(
+                "SELECT id, content_url, visual_phash FROM fingerprints "
+                "WHERE visual_phash IS NOT NULL AND submission_id::text != %s",
+                (submission_id,)
+            )
+        except (ValueError, AttributeError):
+            cur.execute(
+                "SELECT id, content_url, visual_phash FROM fingerprints "
+                "WHERE visual_phash IS NOT NULL"
+            )
         rows = cur.fetchall()
 
         min_dist  = 64
