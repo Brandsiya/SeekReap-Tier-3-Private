@@ -6,3 +6,5 @@ slowapi
 python-dotenv
 pydantic
 psycopg2-binary
+imagehash
+Pillow

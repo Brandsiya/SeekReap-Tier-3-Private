@@ -458,12 +458,24 @@ async def api_analyze(request: Request):
 
         result = await analyze_content(content_id, content_type, params)
 
+        # --- Phase 2: Visual fingerprinting (Track A) ---
+        fp_result = {}
+        try:
+            from fingerprint import run_fingerprint
+            _sub_id = params.get("submission_id", submission_id)
+            _cr_id  = params.get("creator_id",    "unknown")
+            _c_url  = params.get("url",            content_id)
+            fp_result = run_fingerprint(_sub_id, _cr_id, _c_url)
+        except Exception as _fp_err:
+            fp_result = {"error": str(_fp_err), "visual_similarity_score": 0.0}
+
         return {
             "success":    True,
             "job_id":     submission_id,
             "decision":   result["risk_level"],
             "risk_score": result["overall_risk_score"],
             "analysis":   result,
+            "fingerprint": fp_result,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
