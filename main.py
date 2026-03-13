@@ -710,3 +710,42 @@ async def health_db():
         return {"status": "healthy", "database": "connected", "tier": 3}
     except Exception as e:
         return {"status": "unhealthy", "database": str(e), "tier": 3}, 500
+
+
+# ── Internal: stream URL proxy for Tier-5 audio fingerprinting ──
+@app.post("/internal/stream-url")
+async def get_stream_url(request: Request):
+    """
+    Called by Tier-5 to resolve a YouTube URL to a direct audio stream URL.
+    Tier-5 can't reach YouTube directly; Tier-3 can.
+    Returns: {"stream_url": "https://..."} or {"error": "..."}
+    """
+    import subprocess
+    body = await request.json()
+    content_url = body.get("content_url", "")
+    if not content_url:
+        return {"error": "content_url required"}
+    try:
+        result = subprocess.run(
+            [
+                "yt-dlp",
+                "--no-playlist",
+                "--format", "worstaudio/bestaudio",
+                "--get-url",
+                "--no-warnings",
+                "--socket-timeout", "15",
+                "--extractor-retries", "1",
+                content_url,
+            ],
+            capture_output=True, text=True, timeout=25
+        )
+        if result.returncode != 0:
+            return {"error": f"yt-dlp failed: {result.stderr.strip()[:300]}"}
+        stream_url = result.stdout.strip().splitlines()[0]
+        if not stream_url:
+            return {"error": "yt-dlp returned empty URL"}
+        return {"stream_url": stream_url}
+    except subprocess.TimeoutExpired:
+        return {"error": "yt-dlp timed out after 25s"}
+    except Exception as e:
+        return {"error": str(e)}
