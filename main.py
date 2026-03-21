@@ -4,14 +4,24 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
+# Flag weights — higher weight = more contribution to risk score
+FLAG_WEIGHTS = {
+    "high_confidence_duplicate": 0.50,  # near-identical copy — very high signal
+    "probable_duplicate":        0.25,  # strong similarity — significant signal
+    "duplicate_content":         0.10,  # generic duplicate marker
+    "audio_match":               0.05,  # similarity above threshold
+}
+
 def compute_risk_score(audio_similarity: float = 0.0,
                        visual_similarity: float = 0.0,
-                       metadata_flags: int = 0) -> tuple[float, str]:
-    meta_score = min(metadata_flags / 5.0, 1.0)
+                       flags: list = None) -> tuple[float, str]:
+    flags = flags or []
+    # Weighted flag score — capped at 0.5 to prevent flags alone maxing out score
+    flag_score = min(sum(FLAG_WEIGHTS.get(f, 0.02) for f in flags), 0.5)
     risk_score = (
         audio_similarity * 0.5 +
         visual_similarity * 0.3 +
-        meta_score * 0.2
+        flag_score * 0.2
     )
     risk_score = max(0.0, min(risk_score, 1.0))
     if risk_score >= 0.75:
@@ -38,7 +48,7 @@ async def analyze_content(req: AnalyzeRequest) -> Dict:
     score, level = compute_risk_score(
         audio_similarity=req.content_data.get("audio_similarity", 0.0),
         visual_similarity=req.content_data.get("visual_similarity", 0.0),
-        metadata_flags=len(req.content_data.get("flags", []))
+        flags=req.content_data.get("flags", [])
     )
 
     result["risk_score"] = score
