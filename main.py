@@ -24,7 +24,11 @@ def compute_risk_score(audio_similarity: float = 0.0,
         flag_score * 0.2
     )
     risk_score = max(0.0, min(risk_score, 1.0))
-    if risk_score >= 0.75:
+    # Explicit override: high_confidence_duplicate always forces high risk
+    # regardless of formula output — a bit-perfect match is never "medium"
+    if "high_confidence_duplicate" in flags:
+        risk_level = "high"
+    elif risk_score >= 0.75:
         risk_level = "high"
     elif risk_score >= 0.4:
         risk_level = "medium"
