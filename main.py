@@ -48,3 +48,79 @@ async def analyze_content(req: AnalyzeRequest) -> Dict:
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+# ── Internal: stream URL proxy (legacy, kept for compatibility) ──
+@app.post("/internal/stream-url")
+async def get_stream_url(request: Request):
+    import subprocess
+    body = await request.json()
+    content_url = body.get("content_url", "")
+    if not content_url:
+        return {"error": "content_url required"}
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--no-playlist", "--format", "worstaudio/bestaudio",
+             "--get-url", "--no-warnings", "--socket-timeout", "15",
+             "--extractor-retries", "1", content_url],
+            capture_output=True, text=True, timeout=25
+        )
+        if result.returncode != 0:
+            return {"error": f"yt-dlp failed: {result.stderr.strip()[:300]}"}
+        stream_url = result.stdout.strip().splitlines()[0]
+        if not stream_url:
+            return {"error": "yt-dlp returned empty URL"}
+        return {"stream_url": stream_url}
+    except subprocess.TimeoutExpired:
+        return {"error": "yt-dlp timed out after 25s"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Internal: full audio fingerprint pipeline for Tier-5 ──
+@app.post("/internal/audio-fingerprint")
+async def get_audio_fingerprint(request: Request):
+    """
+    Called by Tier-5. Runs full pipeline on Tier-3 (unrestricted egress):
+      yt-dlp --get-url → ffmpeg -t 120 → fpcalc
+    Returns: {"fingerprint": "...", "duration": 123.4} or {"error": "..."}
+    """
+    import subprocess, tempfile, os, json as _json
+    body = await request.json()
+    content_url = body.get("content_url", "")
+    if not content_url:
+        return {"error": "content_url required"}
+    try:
+        # Step 1: get stream URL via yt-dlp
+        r = subprocess.run(
+            ["yt-dlp", "--no-playlist", "--format", "worstaudio/bestaudio",
+             "--get-url", "--no-warnings", "--socket-timeout", "15",
+             "--extractor-retries", "1", content_url],
+            capture_output=True, text=True, timeout=25
+        )
+        if r.returncode != 0:
+            return {"error": f"yt-dlp failed: {r.stderr.strip()[:300]}"}
+        stream_url = r.stdout.strip().splitlines()[0]
+        if not stream_url:
+            return {"error": "yt-dlp returned empty URL"}
+
+        # Step 2: download first 120s via ffmpeg
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = os.path.join(tmp, "audio.m4a")
+            subprocess.run(
+                ["ffmpeg", "-y", "-t", "120", "-i", stream_url,
+                 "-vn", "-acodec", "copy", "-loglevel", "error", out_path],
+                check=True, timeout=180
+            )
+            # Step 3: chromaprint fingerprint
+            fp = subprocess.run(
+                ["fpcalc", "-json", out_path],
+                capture_output=True, text=True, timeout=30, check=True
+            )
+            data = _json.loads(fp.stdout)
+            return {"fingerprint": data["fingerprint"], "duration": float(data["duration"])}
+
+    except subprocess.TimeoutExpired as e:
+        return {"error": f"timed out: {e}"}
+    except Exception as e:
+        return {"error": str(e)}
