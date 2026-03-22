@@ -10,6 +10,7 @@ FLAG_WEIGHTS = {
     "probable_duplicate":        0.25,  # strong similarity — significant signal
     "duplicate_content":         0.10,  # generic duplicate marker
     "audio_match":               0.05,  # similarity above threshold
+    "visual_match":              0.10,  # visual pHash similarity above threshold
 }
 
 def compute_risk_score(audio_similarity: float = 0.0,
