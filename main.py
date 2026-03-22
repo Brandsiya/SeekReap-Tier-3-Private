@@ -59,6 +59,34 @@ async def analyze_content(req: AnalyzeRequest) -> Dict:
     result["risk_level"] = level
     return result
 
+
+# ── Internal: visual pHash fingerprint from thumbnail URL ──
+@app.post("/internal/visual-fingerprint")
+async def get_visual_fingerprint(request: Request):
+    """
+    Called by Tier-5. Downloads thumbnail and computes perceptual hash.
+    Returns: {"phash": "abc123...", "thumbnail_url": "..."} or {"error": "..."}
+    """
+    import httpx as _httpx
+    import imagehash
+    from PIL import Image
+    import io
+
+    body = await request.json()
+    thumbnail_url = body.get("thumbnail_url", "")
+    if not thumbnail_url:
+        return {"error": "thumbnail_url required"}
+
+    try:
+        async with _httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(thumbnail_url)
+            resp.raise_for_status()
+            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            phash = str(imagehash.phash(img))
+            return {"phash": phash, "thumbnail_url": thumbnail_url}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
