@@ -103,7 +103,7 @@ async def get_stream_url(request: Request):
         return {"error": "content_url required"}
     try:
         result = subprocess.run(
-            ["yt-dlp", "--no-playlist", "--format", "worstaudio/bestaudio",
+            ["yt-dlp", "--no-playlist", "--format", "worstaudio/bestaudio", "--cookies", "cookies.txt",
              "--get-url", "--no-warnings", "--socket-timeout", "15",
              "--extractor-retries", "1", content_url],
             capture_output=True, text=True, timeout=25
@@ -136,7 +136,7 @@ async def get_audio_fingerprint(request: Request):
     try:
         # Step 1: get stream URL via yt-dlp
         r = subprocess.run(
-            ["yt-dlp", "--no-playlist", "--format", "worstaudio/bestaudio",
+            ["yt-dlp", "--no-playlist", "--format", "worstaudio/bestaudio", "--cookies", "cookies.txt",
              "--get-url", "--no-warnings", "--socket-timeout", "15",
              "--extractor-retries", "1", content_url],
             capture_output=True, text=True, timeout=25

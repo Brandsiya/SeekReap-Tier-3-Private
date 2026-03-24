@@ -1,0 +1,2 @@
+# Netscape HTTP Cookie File
+# Save your YouTube cookies here after exporting from browser

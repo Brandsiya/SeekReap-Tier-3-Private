@@ -15,3 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt uvicorn yt-dlp
 COPY . .
 
 CMD exec uvicorn main:app --host 0.0.0.0 --port $PORT
+# Add cookies file
+COPY cookies.txt /app/cookies.txt
