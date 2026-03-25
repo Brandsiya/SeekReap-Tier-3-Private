@@ -6,12 +6,12 @@ import tempfile
 import os
 import json as _json
 import logging
+import shutil
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Binary check at startup
-import shutil
 print("ffmpeg:", shutil.which("ffmpeg"))
 print("fpcalc:", shutil.which("fpcalc"))
 
@@ -81,19 +81,16 @@ async def get_audio_fingerprint(request: Request):
         return {"error": "file required"}
     
     try:
-        # Save uploaded file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
             content = await file.read()
             tmp.write(content)
             input_path = tmp.name
             logger.info(f"Saved temp file: {input_path} ({len(content)} bytes)")
         
-        # Convert to audio and fingerprint
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = os.path.join(tmpdir, "audio.mp4")
             logger.info(f"Converting to {out_path}")
             
-            # ffmpeg conversion
             result = subprocess.run(
                 ["ffmpeg", "-y", "-i", input_path,
                  "-t", "120", "-vn", "-acodec", "aac", "-b:a", "128k", "-f", "mp4", out_path],
@@ -105,7 +102,6 @@ async def get_audio_fingerprint(request: Request):
             
             logger.info("ffmpeg conversion successful")
             
-            # fpcalc fingerprint
             fp_result = subprocess.run(
                 ["fpcalc", "-json", out_path],
                 capture_output=True, text=True, timeout=30
@@ -118,17 +114,12 @@ async def get_audio_fingerprint(request: Request):
                 logger.error("fpcalc returned empty output")
                 return {"error": "fpcalc returned empty output"}
             
-            logger.info(f"fpcalc output: {fp_result.stdout[:200]}")
             try:
                 data = _json.loads(fp_result.stdout)
             except Exception as e:
                 logger.error(f"Invalid fpcalc JSON: {e}")
-                return {
-                    "error": "invalid fpcalc JSON",
-                    "raw_output": fp_result.stdout[:500]
-                }
+                return {"error": f"invalid fpcalc JSON: {fp_result.stdout[:200]}"}
             
-            # Clean up
             os.unlink(input_path)
             
             return {
