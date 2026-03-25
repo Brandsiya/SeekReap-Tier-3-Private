@@ -5,6 +5,9 @@ import subprocess
 import tempfile
 import os
 import json as _json
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -88,12 +91,15 @@ async def get_audio_fingerprint(request: Request):
                 capture_output=True, text=True, timeout=30, check=True
             )
             data = _json.loads(fp.stdout)
+            logger.info(f"fpcalc output: {fp.stdout[:200]}")
             os.unlink(input_path)
             return {
                 "fingerprint": data["fingerprint"],
                 "duration": float(data["duration"])
             }
     except subprocess.CalledProcessError as e:
+            logger.error(f"ffmpeg/fpcalc stderr: {e.stderr.decode() if e.stderr else 'None'}")
+            logger.error(f"ffmpeg/fpcalc stdout: {e.stdout.decode() if e.stdout else 'None'}")
         return {"error": f"ffmpeg/fpcalc failed: {e.stderr.decode() if e.stderr else str(e)}"}
     except Exception as e:
         return {"error": str(e)}
