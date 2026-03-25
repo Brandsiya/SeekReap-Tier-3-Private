@@ -10,6 +10,11 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Binary check at startup
+import shutil
+print("ffmpeg:", shutil.which("ffmpeg"))
+print("fpcalc:", shutil.which("fpcalc"))
+
 app = FastAPI()
 
 FLAG_WEIGHTS = {
@@ -109,8 +114,19 @@ async def get_audio_fingerprint(request: Request):
                 logger.error(f"fpcalc failed: {fp_result.stderr}")
                 return {"error": f"fpcalc failed: {fp_result.stderr}"}
             
-            logger.info("fpcalc successful")
-            data = _json.loads(fp_result.stdout)
+            if not fp_result.stdout:
+                logger.error("fpcalc returned empty output")
+                return {"error": "fpcalc returned empty output"}
+            
+            logger.info(f"fpcalc output: {fp_result.stdout[:200]}")
+            try:
+                data = _json.loads(fp_result.stdout)
+            except Exception as e:
+                logger.error(f"Invalid fpcalc JSON: {e}")
+                return {
+                    "error": "invalid fpcalc JSON",
+                    "raw_output": fp_result.stdout[:500]
+                }
             
             # Clean up
             os.unlink(input_path)

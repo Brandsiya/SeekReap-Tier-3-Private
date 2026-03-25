@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     ffmpeg \
-    libchromaprint-tools \
+    chromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
