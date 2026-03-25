@@ -15,4 +15,3 @@ COPY . .
 
 CMD exec uvicorn main:app --host 0.0.0.0 --port $PORT
 # Add cookies file
-COPY cookies.txt /app/cookies.txt
