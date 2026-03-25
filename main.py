@@ -168,7 +168,6 @@ async def get_stream_url(request: Request):
 
 # ── Internal: audio fingerprint from uploaded file ──
 @app.post("/internal/audio-fingerprint-file")
-async def get_audio_fingerprint_file(request: Request):
     """
     Called by Tier-5. Accepts uploaded audio/video file and returns fingerprint.
     """
@@ -220,7 +219,6 @@ async def get_audio_fingerprint_file(request: Request):
 
 # ── Internal: audio fingerprint from uploaded file only ──
 @app.post("/internal/audio-fingerprint")
-async def get_audio_fingerprint(request: Request):
     """
     Accepts uploaded file and returns fingerprint.
     This is the only supported method for audio fingerprinting.
@@ -260,6 +258,89 @@ async def get_audio_fingerprint(request: Request):
             # Clean up
             os.unlink(input_path)
 
+            return {
+                "fingerprint": data["fingerprint"],
+                "duration": float(data["duration"])
+            }
+
+    except subprocess.CalledProcessError as e:
+        return {"error": f"ffmpeg/fpcalc failed: {e.stderr.decode() if e.stderr else str(e)}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ── Internal: audio fingerprint from uploaded file ──
+@app.post("/internal/audio-fingerprint")
+    """
+    Accepts uploaded file and returns fingerprint.
+    """
+    import subprocess, tempfile, os, json as _json
+
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        return {"error": "file required"}
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
+            content = await file.read()
+            tmp.write(content)
+            input_path = tmp.name
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = os.path.join(tmpdir, "audio.mp4")
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", input_path,
+                 "-t", "120", "-vn", "-acodec", "aac", "-b:a", "128k", "-f", "mp4", out_path],
+                check=True, capture_output=True, timeout=180
+            )
+            fp = subprocess.run(
+                ["fpcalc", "-json", out_path],
+                capture_output=True, text=True, timeout=30, check=True
+            )
+            data = _json.loads(fp.stdout)
+            os.unlink(input_path)
+            return {
+                "fingerprint": data["fingerprint"],
+                "duration": float(data["duration"])
+            }
+
+    except subprocess.CalledProcessError as e:
+        return {"error": f"ffmpeg/fpcalc failed: {e.stderr.decode() if e.stderr else str(e)}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ── Internal: audio fingerprint from uploaded file ──
+@app.post("/internal/audio-fingerprint")
+async def get_audio_fingerprint(request: Request):
+    """
+    Accepts uploaded file and returns fingerprint.
+    """
+    import subprocess, tempfile, os, json as _json
+
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        return {"error": "file required"}
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
+            content = await file.read()
+            tmp.write(content)
+            input_path = tmp.name
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = os.path.join(tmpdir, "audio.mp4")
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", input_path,
+                 "-t", "120", "-vn", "-acodec", "aac", "-b:a", "128k", "-f", "mp4", out_path],
+                check=True, capture_output=True, timeout=180
+            )
+            fp = subprocess.run(
+                ["fpcalc", "-json", out_path],
+                capture_output=True, text=True, timeout=30, check=True
+            )
+            data = _json.loads(fp.stdout)
+            os.unlink(input_path)
             return {
                 "fingerprint": data["fingerprint"],
                 "duration": float(data["duration"])
