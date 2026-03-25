@@ -76,8 +76,10 @@ async def health_check():
 async def get_audio_fingerprint(request: Request):
     """Accept uploaded file and return fingerprint."""
     form = await request.form()
+    logger.info(f"Form keys: {list(form.keys())}")
     file = form.get("file")
     if not file:
+        logger.error("No 'file' field in form data")
         return {"error": "file required"}
     
     try:
