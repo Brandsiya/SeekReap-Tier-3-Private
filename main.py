@@ -6,12 +6,12 @@ import tempfile
 import os
 import json as _json
 import logging
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Flag weights — higher weight = more contribution to risk score
 FLAG_WEIGHTS = {
     "high_confidence_duplicate": 0.50,
     "probable_duplicate":        0.25,
@@ -74,34 +74,57 @@ async def get_audio_fingerprint(request: Request):
     file = form.get("file")
     if not file:
         return {"error": "file required"}
+    
     try:
+        # Save uploaded file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
             content = await file.read()
             tmp.write(content)
             input_path = tmp.name
+            logger.info(f"Saved temp file: {input_path} ({len(content)} bytes)")
+        
+        # Convert to audio and fingerprint
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = os.path.join(tmpdir, "audio.mp4")
-            subprocess.run(
+            logger.info(f"Converting to {out_path}")
+            
+            # ffmpeg conversion
+            result = subprocess.run(
                 ["ffmpeg", "-y", "-i", input_path,
                  "-t", "120", "-vn", "-acodec", "aac", "-b:a", "128k", "-f", "mp4", out_path],
-                check=True, capture_output=True, timeout=180
+                capture_output=True, text=True, timeout=180
             )
-            fp = subprocess.run(
+            if result.returncode != 0:
+                logger.error(f"ffmpeg failed: {result.stderr}")
+                return {"error": f"ffmpeg failed: {result.stderr}"}
+            
+            logger.info("ffmpeg conversion successful")
+            
+            # fpcalc fingerprint
+            fp_result = subprocess.run(
                 ["fpcalc", "-json", out_path],
-                capture_output=True, text=True, timeout=30, check=True
+                capture_output=True, text=True, timeout=30
             )
-            data = _json.loads(fp.stdout)
-            logger.info(f"fpcalc output: {fp.stdout[:200]}")
+            if fp_result.returncode != 0:
+                logger.error(f"fpcalc failed: {fp_result.stderr}")
+                return {"error": f"fpcalc failed: {fp_result.stderr}"}
+            
+            logger.info("fpcalc successful")
+            data = _json.loads(fp_result.stdout)
+            
+            # Clean up
             os.unlink(input_path)
+            
             return {
                 "fingerprint": data["fingerprint"],
                 "duration": float(data["duration"])
             }
-    except subprocess.CalledProcessError as e:
-            logger.error(f"ffmpeg/fpcalc stderr: {e.stderr.decode() if e.stderr else 'None'}")
-            logger.error(f"ffmpeg/fpcalc stdout: {e.stdout.decode() if e.stdout else 'None'}")
-        return {"error": f"ffmpeg/fpcalc failed: {e.stderr.decode() if e.stderr else str(e)}"}
+            
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"Timeout: {e}")
+        return {"error": f"Timeout: {e}"}
     except Exception as e:
+        logger.error(f"Unexpected error: {e}")
         return {"error": str(e)}
 
 # ── Internal: visual pHash fingerprint from thumbnail ──
