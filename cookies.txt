@@ -1,5 +1,0 @@
-# Netscape HTTP Cookie File
-.youtube.comTRUE/TRUE0YSCGoNoD9LYix0
-.youtube.comTRUE/TRUE0GPS1
-.youtube.comTRUE/TRUE0VISITOR_INFO1_LIVEoDU6h280E3Y
-.youtube.comTRUE/TRUE0PREFf6=40000000&tz=Africa.Johannesburg
