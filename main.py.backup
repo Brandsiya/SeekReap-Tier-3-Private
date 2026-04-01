@@ -54,12 +54,8 @@ def analyze(request: AnalyzeRequest):
     try:
         data = request.dict()
         
-        # --- SAFE EXTRACTION WITH DEFAULTS ---
+        # Extract fields with safe defaults
         submission_id = data.get("submission_id")
-        if not submission_id:
-            submission_id = str(uuid.uuid4())
-            print(f"Generated new submission_id: {submission_id}")
-        
         content_id = data.get("contentid") or data.get("content_id") or "unknown"
         content_hash = data.get("contenthash") or data.get("content_hash") or ""
         content_type = data.get("contenttype") or data.get("content_type") or "audio"
@@ -92,12 +88,6 @@ def analyze(request: AnalyzeRequest):
         if flags is None:
             flags = []
         
-        # --- DEBUG LOG ---
-        print(f"ANALYZE INPUT - submission_id: {submission_id}")
-        print(f"ANALYZE INPUT - content_id: {content_id}")
-        print(f"ANALYZE INPUT - content_type: {content_type}")
-        print(f"ANALYZE INPUT - audio_similarity: {audio_similarity}")
-        
         # Calculate overall risk score
         max_similarity = max(audio_similarity, visual_similarity)
         risk_score = max_similarity
@@ -114,20 +104,10 @@ def analyze(request: AnalyzeRequest):
         else:
             risk_level = "low"
         
-        # --- DATABASE OPERATIONS (IDEMPOTENT) ---
         conn = get_db()
         cur = conn.cursor()
         
-        # FIX: Always attempt insert first - let Postgres handle duplicates
-        creator_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "system-auto"))
-        
-        cur.execute("""
-            INSERT INTO submissions (id, creator_id, content_type, status, submitted_at)
-            VALUES (%s::uuid, %s, %s, 'pending', NOW())
-            ON CONFLICT (id) DO NOTHING
-        """, (submission_id, creator_id, content_type))
-        
-        # Now update with analysis results
+        # Update submission with analysis results
         cur.execute("""
             UPDATE submissions
             SET status = 'analyzed',
@@ -146,36 +126,8 @@ def analyze(request: AnalyzeRequest):
         
         updated = cur.fetchone()
         
-        # If update failed (shouldn't happen, but just in case), try one more time
-        if not updated:
-            print(f"Update failed for {submission_id}, retrying with forced insert...")
-            # Force insert again and retry update
-            cur.execute("""
-                INSERT INTO submissions (id, creator_id, content_type, status, submitted_at)
-                VALUES (%s::uuid, %s, %s, 'pending', NOW())
-                ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
-            """, (submission_id, creator_id, content_type))
-            
-            cur.execute("""
-                UPDATE submissions
-                SET status = 'analyzed',
-                    overall_risk_score = %s,
-                    risk_level = %s,
-                    analysis_details = %s::jsonb,
-                    analyzed_at = NOW()
-                WHERE id = %s::uuid
-                RETURNING id
-            """, (risk_score, risk_level, json.dumps({
-                "audio_similarity": audio_similarity,
-                "visual_similarity": visual_similarity,
-                "duplicate_content": duplicate_content,
-                "flags": flags
-            }), submission_id))
-            
-            updated = cur.fetchone()
-        
         if updated:
-            # Update job queue if it exists
+            # Update job queue
             cur.execute("""
                 UPDATE job_queue
                 SET status = 'completed',
@@ -223,16 +175,45 @@ def analyze(request: AnalyzeRequest):
                 "risk_level": risk_level
             }
         else:
-            # If we still can't update, something is seriously wrong
-            conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to upsert submission {submission_id}")
+            raise HTTPException(status_code=404, detail="submission not found")
             
     except Exception as e:
         import traceback
-        error_detail = f"Analyze failed: {str(e)}\n{traceback.format_exc()}"
-        print(error_detail)
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'cur' in locals():
+            cur.close()
+        if 'conn' in locals():
+            conn.close()
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
+
+@app.get("/debug/db-test")
+def debug_db_test():
+    """Simple debug endpoint to test database connection"""
+    import os
+    import psycopg2
+    
+    try:
+        db_url = os.environ.get('DATABASE_URL')
+        if not db_url:
+            return {"error": "DATABASE_URL not set"}
+        
+        # Try to connect
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("SELECT 1 as test")
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        return {
+            "status": "connected",
+            "test_result": result[0],
+            "url_prefix": db_url[:50] + "..."
+        }
+    except Exception as e:
+        return {"error": str(e)}
