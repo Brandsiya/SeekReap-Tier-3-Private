@@ -21,22 +21,16 @@ def health():
     return {"status": "ok"}
 
 
-class ContentData(BaseModel):
-    audio_similarity: Optional[float] = 0.0
-    visual_similarity: Optional[float] = 0.0
-    duplicate_content: Optional[bool] = False
-    flags: Optional[List[str]] = []
-
-
 class AnalyzeRequest(BaseModel):
     submission_id: Optional[str] = None
-    contentid: Optional[str] = None
-    content_id: Optional[str] = None
-    contenthash: Optional[str] = None
-    content_hash: Optional[str] = None
-    contenttype: Optional[str] = None
-    content_type: Optional[str] = None
-    contentdata: Optional[Dict[str, Any]] = None
+    content_id:    Optional[str] = None
+    contentid:     Optional[str] = None
+    content_hash:  Optional[str] = None
+    contenthash:   Optional[str] = None
+    content_type:  Optional[str] = None
+    contenttype:   Optional[str] = None
+    title:         Optional[str] = None
+    contentdata:   Optional[Dict[str, Any]] = None
 
 
 @app.post("/api/analyze")
@@ -51,7 +45,7 @@ def analyze(request: AnalyzeRequest):
 
         submission_id = data.get("submission_id") or str(uuid.uuid4())
         content_type  = (
-            data.get("contenttype") or data.get("content_type") or "audio"
+            data.get("content_type") or data.get("contenttype") or "audio"
         )
         contentdata = data.get("contentdata") or {}
 
