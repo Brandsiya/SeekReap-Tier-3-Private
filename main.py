@@ -1,17 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import psycopg2
 import os
 import uuid
-import json
-import hashlib
-import time
 from typing import Optional, Dict, Any, List
 
 app = FastAPI()
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,23 +15,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database connection
-def get_db():
-    db_url = os.environ.get('DATABASE_URL')
-    if not db_url:
-        raise ValueError("DATABASE_URL environment variable not set")
-    return psycopg2.connect(db_url)
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# Request/Response models
+
 class ContentData(BaseModel):
     audio_similarity: Optional[float] = 0.0
     visual_similarity: Optional[float] = 0.0
     duplicate_content: Optional[bool] = False
     flags: Optional[List[str]] = []
+
 
 class AnalyzeRequest(BaseModel):
     submission_id: Optional[str] = None
@@ -48,63 +38,43 @@ class AnalyzeRequest(BaseModel):
     content_type: Optional[str] = None
     contentdata: Optional[Dict[str, Any]] = None
 
+
 @app.post("/api/analyze")
 def analyze(request: AnalyzeRequest):
-    """Analyze content for risk assessment (called by Tier-5 workers)"""
+    """
+    Stateless risk analysis — called by Tier-5.
+    DOES NOT write to DB. Returns risk_score + risk_level only.
+    Tier-5 is the single authority for all DB state changes.
+    """
     try:
         data = request.dict()
-        
-        # --- SAFE EXTRACTION WITH DEFAULTS ---
-        submission_id = data.get("submission_id")
-        if not submission_id:
-            submission_id = str(uuid.uuid4())
-            print(f"Generated new submission_id: {submission_id}")
-        
-        content_id = data.get("contentid") or data.get("content_id") or "unknown"
-        content_hash = data.get("contenthash") or data.get("content_hash") or ""
-        content_type = data.get("contenttype") or data.get("content_type") or "audio"
-        
-        # Extract contentdata safely
+
+        submission_id = data.get("submission_id") or str(uuid.uuid4())
+        content_type  = (
+            data.get("contenttype") or data.get("content_type") or "audio"
+        )
         contentdata = data.get("contentdata") or {}
-        
-        # Extract similarity scores with safe defaults
-        audio_similarity = contentdata.get("audio_similarity", 0.0)
-        if audio_similarity is None:
-            audio_similarity = 0.0
-        try:
-            audio_similarity = float(audio_similarity)
-        except (TypeError, ValueError):
-            audio_similarity = 0.0
-            
-        visual_similarity = contentdata.get("visual_similarity", 0.0)
-        if visual_similarity is None:
-            visual_similarity = 0.0
-        try:
-            visual_similarity = float(visual_similarity)
-        except (TypeError, ValueError):
-            visual_similarity = 0.0
-        
-        duplicate_content = contentdata.get("duplicate_content", False)
-        if duplicate_content is None:
-            duplicate_content = False
-            
-        flags = contentdata.get("flags", [])
-        if flags is None:
-            flags = []
-        
-        # --- DEBUG LOG ---
-        print(f"ANALYZE INPUT - submission_id: {submission_id}")
-        print(f"ANALYZE INPUT - content_id: {content_id}")
-        print(f"ANALYZE INPUT - content_type: {content_type}")
-        print(f"ANALYZE INPUT - audio_similarity: {audio_similarity}")
-        
-        # Calculate overall risk score
-        max_similarity = max(audio_similarity, visual_similarity)
-        risk_score = max_similarity
-        
-        if duplicate_content:
+
+        def safe_float(val, default=0.0):
+            try:
+                return float(val) if val is not None else default
+            except (TypeError, ValueError):
+                return default
+
+        audio_sim  = safe_float(contentdata.get("audio_similarity"))
+        visual_sim = safe_float(contentdata.get("visual_similarity"))
+        dup        = bool(contentdata.get("duplicate_content") or False)
+        flags      = contentdata.get("flags") or []
+
+        print(
+            f"ANALYZE submission={submission_id} type={content_type} "
+            f"audio={audio_sim} visual={visual_sim}"
+        )
+
+        risk_score = max(audio_sim, visual_sim)
+        if dup:
             risk_score = min(1.0, risk_score + 0.3)
-        
+
         if risk_score >= 0.8:
             risk_level = "critical"
         elif risk_score >= 0.6:
@@ -113,125 +83,25 @@ def analyze(request: AnalyzeRequest):
             risk_level = "medium"
         else:
             risk_level = "low"
-        
-        # --- DATABASE OPERATIONS (IDEMPOTENT) ---
-        conn = get_db()
-        cur = conn.cursor()
-        
-        # FIX: Always attempt insert first - let Postgres handle duplicates
-        creator_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "system-auto"))
-        
-        cur.execute("""
-            INSERT INTO submissions (id, creator_id, content_type, status, submitted_at)
-            VALUES (%s::uuid, %s, %s, 'pending', NOW())
-            ON CONFLICT (id) DO NOTHING
-        """, (submission_id, creator_id, content_type))
-        
-        # Now update with analysis results
-        cur.execute("""
-            UPDATE submissions
-            SET status = 'analyzed',
-                overall_risk_score = %s,
-                risk_level = %s,
-                analysis_details = %s::jsonb,
-                analyzed_at = NOW()
-            WHERE id = %s::uuid
-            RETURNING id
-        """, (risk_score, risk_level, json.dumps({
-            "audio_similarity": audio_similarity,
-            "visual_similarity": visual_similarity,
-            "duplicate_content": duplicate_content,
-            "flags": flags
-        }), submission_id))
-        
-        updated = cur.fetchone()
-        
-        # If update failed (shouldn't happen, but just in case), try one more time
-        if not updated:
-            print(f"Update failed for {submission_id}, retrying with forced insert...")
-            # Force insert again and retry update
-            cur.execute("""
-                INSERT INTO submissions (id, creator_id, content_type, status, submitted_at)
-                VALUES (%s::uuid, %s, %s, 'pending', NOW())
-                ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
-            """, (submission_id, creator_id, content_type))
-            
-            cur.execute("""
-                UPDATE submissions
-                SET status = 'analyzed',
-                    overall_risk_score = %s,
-                    risk_level = %s,
-                    analysis_details = %s::jsonb,
-                    analyzed_at = NOW()
-                WHERE id = %s::uuid
-                RETURNING id
-            """, (risk_score, risk_level, json.dumps({
-                "audio_similarity": audio_similarity,
-                "visual_similarity": visual_similarity,
-                "duplicate_content": duplicate_content,
-                "flags": flags
-            }), submission_id))
-            
-            updated = cur.fetchone()
-        
-        if updated:
-            # Update job queue if it exists
-            cur.execute("""
-                UPDATE job_queue
-                SET status = 'completed',
-                    completed_at = NOW()
-                WHERE submission_id = %s::uuid
-                AND job_type = 'risk_analysis'
-            """, (submission_id,))
-            
-            conn.commit()
-            
-            # Call Tier-4 finalize endpoint
-            try:
-                import requests
-                finalize_payload = {
-                    "submission_id": submission_id,
-                    "analysis": {
-                        "risk_score": risk_score,
-                        "risk_level": risk_level,
-                        "details": {
-                            "audio_similarity": audio_similarity,
-                            "visual_similarity": visual_similarity,
-                            "duplicate_content": duplicate_content,
-                            "flags": flags
-                        }
-                    }
-                }
-                
-                tier4_url = os.environ.get('TIER4_URL', 'https://seekreap-tier-4-dev.fly.dev')
-                response = requests.post(
-                    f"{tier4_url}/api/finalize",
-                    json=finalize_payload,
-                    timeout=10
-                )
-                
-                if response.status_code != 200:
-                    print(f"Warning: Failed to call Tier-4 finalize: {response.status_code}")
-                    
-            except Exception as e:
-                print(f"Warning: Error calling Tier-4 finalize: {e}")
-            
-            return {
-                "status": "analyzed",
-                "submission_id": submission_id,
-                "risk_score": risk_score,
-                "risk_level": risk_level
-            }
-        else:
-            # If we still can't update, something is seriously wrong
-            conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to upsert submission {submission_id}")
-            
+
+        return {
+            "status":        "analyzed",
+            "submission_id": submission_id,
+            "risk_score":    risk_score,
+            "risk_level":    risk_level,
+            "details": {
+                "audio_similarity":  audio_sim,
+                "visual_similarity": visual_sim,
+                "duplicate_content": dup,
+                "flags":             flags,
+            },
+        }
+
     except Exception as e:
         import traceback
-        error_detail = f"Analyze failed: {str(e)}\n{traceback.format_exc()}"
-        print(error_detail)
+        print(f"Analyze error: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
