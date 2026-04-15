@@ -36,8 +36,8 @@ class AnalyzeRequest(BaseModel):
 @app.post("/api/analyze")
 def analyze(request: AnalyzeRequest):
     """
-    Stateless risk analysis — called by Tier-5.
-    DOES NOT write to DB. Returns risk_score + risk_level only.
+    Stateless risk analysis.
+    No DB access. Returns risk_score + risk_level only.
     Tier-5 is the single authority for all DB state changes.
     """
     try:
