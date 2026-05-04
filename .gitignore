@@ -1,70 +1,38 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
-venv/
 env/
+venv/
 .venv/
+
+# Backups
+*.backup
+*.bak
+*~
+
+# Test files
+test_*.wav
+test_*.mp3
+*.tmp
 
 # IDE
 .vscode/
 .idea/
 *.swp
-*.swo
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-logs/
-
-# Testing
-.coverage
-.pytest_cache/
-
-# Temporary files
-*.tmp
-*.temp
-
-# Config files (sensitive)
-config.json
-secrets.json
-.env
-.env.local
-venv_t3/
-venv_t3/
-# Runtime
-tier3_server.pid
-tier3_server.log
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Virtual environments
-venv*/
-*.log
-*.out
-archive/
-venv_t3/
+# Legacy/backup directories
+legacy/
+backups/

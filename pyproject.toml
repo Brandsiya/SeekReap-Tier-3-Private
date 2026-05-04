@@ -1,3 +1,0 @@
-[tool.pytest.ini_options]
-addopts = "--cov=tier3 --cov-report=term-missing"
-testpaths = ["tests"]
