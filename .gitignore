@@ -36,3 +36,4 @@ Thumbs.db
 # Legacy/backup directories
 legacy/
 backups/
+/supabase/
