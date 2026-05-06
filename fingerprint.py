@@ -147,6 +147,15 @@ def run_fingerprint(
             """,
             (submission_id, creator_id, content_url, phash, thumb_url)
         )
+        # Link fingerprint row to content_registry
+        cur.execute("""
+            UPDATE fingerprints f
+            SET registry_id = cr.id
+            FROM content_registry cr
+            WHERE cr.submission_id = f.submission_id
+            AND f.submission_id = %s
+            AND f.registry_id IS NULL
+        """, (submission_id,))
         conn.commit()
         cur.close()
         conn.close()
