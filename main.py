@@ -29,10 +29,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database connection (optional - for similarity search)
 def get_db():
     import psycopg2
-    import psycopg2.extras
     db_url = os.environ.get('DATABASE_URL')
     if not db_url:
         return None
@@ -41,8 +39,7 @@ def get_db():
 
 @app.get("/health")
 def health():
-    """Health check endpoint"""
-    return {"status": "ok", "service": "tier-3", "version": "2.0"}
+    return {"status": "ok", "service": "tier-3", "version": "2.1"}
 
 
 @app.post("/api/fingerprint")
@@ -53,27 +50,23 @@ async def generate_content_fingerprint(request: Request):
         content_type = data.get("content_type", "text")
         content_path = data.get("content_path")
         content_text = data.get("content_text")
-        content_hash = data.get("content_hash")
-        
         fingerprint = generate_fingerprint(content_type, content_path, content_text)
-        
-        return {
-            "status": "success",
-            "fingerprint": fingerprint
-        }
+        return {"status": "success", "fingerprint": fingerprint}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/similarity/search")
 async def search_similar(request: Request):
-    """Search for similar submissions"""
+    """Search for similar submissions and materialize graph edges"""
     try:
         data = await request.json()
-        fingerprint = data.get("fingerprint")
-        threshold = data.get("threshold", 0.85)
-        limit = data.get("limit", 50)
-        
+        fingerprint          = data.get("fingerprint")
+        threshold            = data.get("threshold", 0.85)
+        limit                = data.get("limit", 50)
+        source_submission_id = data.get("submission_id")
+        source_registry_id   = data.get("registry_id")
+
         conn = get_db()
         if not conn:
             return {
@@ -81,17 +74,73 @@ async def search_similar(request: Request):
                 "message": "Database not configured",
                 "matches": []
             }
-        
+
         cur = conn.cursor()
         matches = find_similar_submissions(cur, fingerprint, threshold)
         cur.close()
+
+        edges_created = 0
+        if source_submission_id and matches:
+            edge_cur = conn.cursor()
+            for match in matches:
+                if match["submission_id"] == source_submission_id:
+                    continue
+                score = match["similarity_score"]
+                if score >= 0.98:
+                    severity = "critical"
+                elif score >= 0.85:
+                    severity = "high"
+                elif score >= 0.70:
+                    severity = "medium"
+                else:
+                    severity = "low"
+
+                # Satisfy the registry_link_check constraint:
+                # at least one of source_content_id / matched_content_id must be non-null
+                src_reg  = source_registry_id
+                mat_reg  = match.get("registry_id")
+                # If both are None the constraint would reject — skip
+                if not src_reg and not mat_reg:
+                    continue
+
+                try:
+                    edge_cur.execute("""
+                        INSERT INTO content_matches (
+                            id, submission_id, matched_submission_id,
+                            similarity_score, match_type, fingerprint_version,
+                            detected_at, severity,
+                            source_content_id, matched_content_id,
+                            match_scope, match_source
+                        ) VALUES (
+                            gen_random_uuid(), %s, %s, %s,
+                            'perceptual', 'phash-v1', NOW(),
+                            %s, %s, %s, 'canonical', 'internal'
+                        ) ON CONFLICT DO NOTHING
+                    """, (
+                        source_submission_id,
+                        match["submission_id"],
+                        score,
+                        severity,
+                        src_reg,
+                        mat_reg
+                    ))
+                    edges_created += 1
+                except Exception as edge_err:
+                    print(f"Edge insert failed: {edge_err}")
+                    conn.rollback()
+                    continue
+
+            conn.commit()
+            edge_cur.close()
+
         conn.close()
-        
+
         return {
             "status": "success",
             "matches": matches[:limit],
             "threshold": threshold,
-            "total": len(matches)
+            "total": len(matches),
+            "edges_created": edges_created
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -102,21 +151,18 @@ async def analyze_content(request: Request):
     """Legacy analyze endpoint - maintained for Tier-5 compatibility"""
     try:
         data = await request.json()
-        
-        # Extract values with defaults
         submission_id = data.get("submission_id", "unknown")
-        content_type = data.get("content_type", data.get("contentType", "audio"))
-        contentdata = data.get("contentdata", {})
-        
-        # Calculate risk score from provided data
-        audio_sim = contentdata.get("audio_similarity", 0.0)
+        content_type  = data.get("content_type", data.get("contentType", "audio"))
+        contentdata   = data.get("contentdata", {})
+
+        audio_sim  = contentdata.get("audio_similarity", 0.0)
         visual_sim = contentdata.get("visual_similarity", 0.0)
-        duplicate = contentdata.get("duplicate_content", False)
-        
+        duplicate  = contentdata.get("duplicate_content", False)
+
         risk_score = max(audio_sim, visual_sim)
         if duplicate:
             risk_score = min(1.0, risk_score + 0.3)
-        
+
         if risk_score >= 0.8:
             risk_level = "critical"
         elif risk_score >= 0.6:
@@ -125,7 +171,7 @@ async def analyze_content(request: Request):
             risk_level = "medium"
         else:
             risk_level = "low"
-        
+
         return {
             "status": "analyzed",
             "submission_id": submission_id,
