@@ -161,8 +161,8 @@ def find_similar_submissions(cursor, fingerprint: Dict[str, Any], threshold: flo
                 f.visual_phash,
                 f.id          AS fingerprint_id
             FROM fingerprints f
-            JOIN submissions s ON s.id = f.submission_id
-            LEFT JOIN content_registry cr ON cr.submission_id = s.id
+            JOIN public.submissions s ON s.id = f.submission_id
+            LEFT JOIN public.content_registry cr ON cr.submission_id = s.id
             WHERE f.visual_phash IS NOT NULL
         """)
         rows = cursor.fetchall()

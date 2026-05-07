@@ -17,8 +17,40 @@ from fingerprint_engine import (
     compare_fingerprints
 )
 
+# Startup DB verification — fails fast on schema drift
+def verify_database():
+    import psycopg2
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("WARNING: DATABASE_URL not set, skipping DB verification")
+        return
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        required_tables = [
+            "public.content_registry",
+            "public.content_matches",
+            "public.submissions",
+            "public.fingerprints",
+        ]
+        for table in required_tables:
+            cur.execute(f"SELECT to_regclass('{table}')")
+            result = cur.fetchone()[0]
+            if result is None:
+                raise Exception(f"Missing required table: {table}")
+        cur.close()
+        conn.close()
+        print("DB verification passed: all required tables present")
+    except Exception as e:
+        print(f"DB verification failed: {e}")
+        raise
+
 # Create FastAPI app
 app = FastAPI(title="SeekReap Tier-3", description="Content Analysis Service")
+
+@app.on_event("startup")
+async def startup_event():
+    verify_database()
 
 # CORS
 app.add_middleware(
@@ -105,7 +137,7 @@ async def search_similar(request: Request):
 
                 try:
                     edge_cur.execute("""
-                        INSERT INTO content_matches (
+                        INSERT INTO public.content_matches (
                             id, submission_id, matched_submission_id,
                             similarity_score, match_type, fingerprint_version,
                             detected_at, severity,
