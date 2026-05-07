@@ -5,6 +5,7 @@ Perceptual fingerprinting and similarity detection
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import os
 import json
 import hashlib
@@ -38,6 +39,37 @@ def verify_database():
             result = cur.fetchone()[0]
             if result is None:
                 raise Exception(f"Missing required table: {table}")
+
+        # Verify critical indexes exist
+        cur.execute("""
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public'
+            AND indexname IN (
+                'idx_matches_source_content',
+                'idx_matches_similarity',
+                'idx_fingerprints_submission',
+                'idx_registry_visual_phash'
+            )
+        """)
+        found_indexes = {row[0] for row in cur.fetchall()}
+        expected_indexes = {
+            'idx_matches_source_content',
+            'idx_matches_similarity',
+            'idx_fingerprints_submission',
+            'idx_registry_visual_phash'
+        }
+        missing_indexes = expected_indexes - found_indexes
+        if missing_indexes:
+            print(f"WARNING: Missing indexes: {missing_indexes}")
+
+        # Verify extensions
+        cur.execute("""
+            SELECT extname FROM pg_extension
+            WHERE extname IN ('pgcrypto', 'uuid-ossp')
+        """)
+        extensions = {row[0] for row in cur.fetchall()}
+        print(f"Active extensions: {extensions}")
+
         cur.close()
         conn.close()
         print("DB verification passed: all required tables present")
@@ -45,12 +77,17 @@ def verify_database():
         print(f"DB verification failed: {e}")
         raise
 
-# Create FastAPI app
-app = FastAPI(title="SeekReap Tier-3", description="Content Analysis Service")
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     verify_database()
+    yield
+
+# Create FastAPI app
+app = FastAPI(
+    title="SeekReap Tier-3",
+    description="Content Analysis Service",
+    lifespan=lifespan
+)
 
 # CORS
 app.add_middleware(
