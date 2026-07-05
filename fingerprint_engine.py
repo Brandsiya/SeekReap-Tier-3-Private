@@ -6,6 +6,9 @@ import hashlib
 import numpy as np
 from typing import Dict, Any, List
 import json
+import os
+import tempfile
+import requests
 
 try:
     from PIL import Image
@@ -26,6 +29,33 @@ try:
     TEXT_AVAILABLE = True
 except ImportError:
     TEXT_AVAILABLE = False
+
+
+def _download_to_temp(url: str, max_bytes: int = 200 * 1024 * 1024) -> str:
+    """Download a remote file (e.g. a Supabase Storage signed URL) to a local
+    temp file so existing PIL/librosa/cv2-based fingerprinters can read it.
+    Raises on failure — caller should catch and fall back gracefully."""
+    resp = requests.get(url, stream=True, timeout=30)
+    resp.raise_for_status()
+    suffix = os.path.splitext(url.split("?")[0])[1][:10] or ".bin"
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 256):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError(f"Remote file exceeds {max_bytes} byte limit")
+                f.write(chunk)
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def fingerprint_image(image_path: str) -> Dict[str, Any]:
@@ -82,11 +112,25 @@ def fingerprint_text(text: str) -> Dict[str, Any]:
 
 
 def fingerprint_video(video_path: str) -> Dict[str, Any]:
-    return {
-        "type": "video",
-        "algorithm": "placeholder",
-        "fingerprint_hash": hashlib.sha256(f"video:{video_path}".encode()).hexdigest()[:32]
-    }
+    # NOTE: this is still not a perceptual/frame-based video fingerprint —
+    # building real frame-sampling perceptual hashing for video is a
+    # separate, larger effort. This at least hashes the actual downloaded
+    # file bytes (exact-match capable) instead of the file path string,
+    # which produced a different "fingerprint" every time regardless of
+    # the video's actual content.
+    try:
+        hasher = hashlib.sha256()
+        with open(video_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 256), b""):
+                hasher.update(chunk)
+        return {
+            "type": "video",
+            "algorithm": "sha256-exact-match",
+            "fingerprint_hash": hasher.hexdigest()[:32],
+            "note": "Exact-match only — perceptual video fingerprinting not yet implemented",
+        }
+    except Exception as e:
+        return {"error": str(e), "fingerprint": None}
 
 
 def fingerprint_code(code: str, language: str = "python") -> Dict[str, Any]:
@@ -102,16 +146,38 @@ def fingerprint_code(code: str, language: str = "python") -> Dict[str, Any]:
 
 
 def generate_fingerprint(content_type: str, content_path: str = None, content_text: str = None) -> Dict[str, Any]:
-    fingerprinters = {
-        "image": lambda: fingerprint_image(content_path) if content_path else fingerprint_text(content_text or ""),
-        "audio": lambda: fingerprint_audio(content_path) if content_path else {"error": "no file path"},
-        "video": lambda: fingerprint_video(content_path) if content_path else {"error": "no file path"},
-        "text":  lambda: fingerprint_text(content_text or ""),
-        "code":  lambda: fingerprint_code(content_text or "", "python"),
-        "pdf":   lambda: fingerprint_text(content_text or ""),
-        "epub":  lambda: fingerprint_text(content_text or "")
-    }
-    return fingerprinters.get(content_type, fingerprinters["text"])()
+    downloaded_path = None
+    try:
+        # content_path may now be a real, fetchable URL (e.g. a Supabase
+        # Storage signed URL) rather than a local filesystem path — download
+        # it first since PIL/librosa/file-hashing below expect a local path.
+        if content_path and content_path.startswith(("http://", "https://")):
+            try:
+                downloaded_path = _download_to_temp(content_path)
+                content_path = downloaded_path
+            except Exception as e:
+                if content_type in ("audio", "video"):
+                    return {"error": f"could not download content: {e}", "fingerprint": None}
+                # For text-like types, fall back to title/text fingerprinting
+                # rather than failing outright.
+                content_path = None
+
+        fingerprinters = {
+            "image": lambda: fingerprint_image(content_path) if content_path else fingerprint_text(content_text or ""),
+            "audio": lambda: fingerprint_audio(content_path) if content_path else {"error": "no file path"},
+            "video": lambda: fingerprint_video(content_path) if content_path else {"error": "no file path"},
+            "text":  lambda: fingerprint_text(content_text or ""),
+            "code":  lambda: fingerprint_code(content_text or "", "python"),
+            "pdf":   lambda: fingerprint_text(content_text or ""),
+            "epub":  lambda: fingerprint_text(content_text or "")
+        }
+        return fingerprinters.get(content_type, fingerprinters["text"])()
+    finally:
+        if downloaded_path:
+            try:
+                os.unlink(downloaded_path)
+            except OSError:
+                pass
 
 
 def compare_fingerprints(fp1: Dict[str, Any], fp2: Dict[str, Any]) -> float:
